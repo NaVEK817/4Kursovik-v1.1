@@ -323,6 +323,9 @@ class CandidateAnalyzer(QThread):
 class AIAgentWindow(QWidget):
     """Окно AI-агента для анализа кандидатов"""
     
+    analysis_completed = pyqtSignal()
+    analysis_interrupted = pyqtSignal()
+
     RESUME_FILE = "resume_file.json"
     
     def __init__(self, vacancy):
@@ -332,8 +335,34 @@ class AIAgentWindow(QWidget):
         self.analysis_results = []
         self.analyzer = None
         self.cache_key = self.vacancy.get('id', 'default')
+        self.analysis_started = False
         self.init_ui()
+
+    def save_results_to_file(self, results):
+        """Сохраняет результаты анализа в файл"""
+        if not results:
+            return
+    
+        vacancy_id = str(self.vacancy.get('id', 'default'))
+        cache_file = f"analysis_cache_{vacancy_id}.json"
+    
+        try:
+            # Подготавливаем данные для сохранения
+            save_data = []
+            for r in results:
+                save_data.append({
+                    'candidate': r['candidate'],
+                    'score': r['score'],
+                    'details': r.get('details', ''),
+                    'criteria': r.get('criteria', {})
+                })
         
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(save_data, f, ensure_ascii=False, indent=2, default=str)
+            print(f"Результаты сохранены в {cache_file}")
+        except Exception as e:
+            print(f"Ошибка сохранения результатов: {e}")
+
     def load_candidates_from_file(self):
         """Загрузка кандидатов из resume_file.json"""
         candidates = []
@@ -571,8 +600,12 @@ class AIAgentWindow(QWidget):
     
     def display_results(self, results):
         """Отображение результатов анализа"""
-        self.analysis_results = results
         
+        self.analysis_results = results
+        # Сохраняем результаты в файл
+        self.save_results_to_file(results)
+        # Отправляем сигнал о завершении анализа
+        self.analysis_completed.emit()
         # Показываем кнопку кэша после анализа
         self.cache_btn.setVisible(True)
     

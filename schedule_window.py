@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QMessageBox, QGroupBox, QHeaderView,
                              QComboBox, QTimeEdit, QTextEdit, QLineEdit,
                              QDialog, QDialogButtonBox, QFormLayout, QSpinBox,
-                             QTabWidget, QSplitter, QFrame, QFileDialog, QDateEdit)
+                             QTabWidget, QSplitter, QFrame, QFileDialog, QDateEdit, QMenu)
 from PyQt5.QtCore import Qt, QDate, QTime, pyqtSignal, QRect
 from PyQt5.QtGui import QColor, QPainter, QBrush, QPen, QTextCharFormat
 import styles
@@ -836,8 +836,141 @@ class RescheduleRequestDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-        self.setLayout(layout)
+        self.interviews_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.interviews_table.customContextMenuRequested.connect(self.show_interview_context_menu)
 
+        self.setLayout(layout)
+    def show_interview_context_menu(self, pos):
+        """Показать контекстное меню для собеседования"""
+        row = self.interviews_table.currentRow()
+        if row < 0:
+            return
+    
+        # Получаем данные собеседования
+        interview_id = self.interviews_table.item(row, 0).text()
+        date_str = self.calendar.selectedDate().toString("yyyy-MM-dd")
+    
+        # Находим собеседование
+        interview = None
+        for i in self.interviews.get(date_str, []):
+            if i.get('id') == interview_id:
+                interview = i
+                break
+    
+        if not interview:
+            return
+    
+        menu = QMenu()
+    
+    # Просмотр деталей
+        view_action = menu.addAction("👁️ Просмотреть детали")
+        view_action.triggered.connect(lambda: self.show_interview_details(interview))
+    
+        menu.addSeparator()
+    
+    # Отправка на email
+        email_action = menu.addAction("✉️ Отправить приглашение на email")
+        email_action.triggered.connect(lambda: self.send_invitation_email(interview))
+    
+    # Прикрепить файл с оффером
+        attach_action = menu.addAction("📎 Прикрепить файл с оффером")
+        attach_action.triggered.connect(lambda: self.attach_offer_file(interview))
+    
+        menu.addSeparator()
+    
+    # Запрос на перенос
+        reschedule_action = menu.addAction("🔄 Запросить перенос")
+        reschedule_action.triggered.connect(lambda: self.request_reschedule(interview))
+    
+    # Удаление
+        if interview.get('interviewer') == self.user_data.get('username') or self.user_data.get('role') == 'admin':
+            delete_action = menu.addAction("🗑️ Удалить")
+            delete_action.triggered.connect(lambda: self.delete_interview(date_str, interview))
+    
+        menu.exec_(self.interviews_table.mapToGlobal(pos))
+
+    def send_invitation_email(self, interview):
+        """Отправляет приглашение на email"""
+        candidate = interview.get('candidate', '')
+        email = self.get_candidate_email(candidate)
+    
+        if not email:
+            # Если email не найден, предлагаем ввести
+            from PyQt5.QtWidgets import QInputDialog
+            email, ok = QInputDialog.getText(
+                self,
+                "Введите email",
+                f"Введите email для кандидата {candidate}:",
+                text=""
+            )
+            if not ok or not email:
+                return
+    
+        # Проверяем, прикреплен ли файл с оффером
+        offer_file = interview.get('offer_file')
+        file_info = ""
+        if offer_file and os.path.exists(offer_file):
+            file_info = f"\n📎 Прикреплен файл: {os.path.basename(offer_file)}"
+    
+        # Формируем текст письма
+        email_text = f"""Тема: Приглашение на собеседование - {candidate}
+
+    Уважаемый(ая) {candidate}!
+
+    Вам назначено собеседование на вакансию в S7 Airlines.
+
+    📅 Дата: {interview.get('date')}
+    ⏰ Время: {interview.get('time')}
+    👥 Интервьюер: {interview.get('interviewer', 'Не назначен')}
+
+    📝 Комментарий: {interview.get('comment', 'Нет комментария')}
+
+    Пожалуйста, подтвердите своё участие ответом на это письмо.
+
+    С уважением,
+    Команда S7 Recruitment
+    {file_info}
+    """
+    
+    # Здесь должна быть реальная отправка email
+    # В демо-версии просто показываем сообщение
+        QMessageBox.information(
+            self,
+            "Отправка приглашения",
+            f"✅ Приглашение успешно отправлено на {email}\n\n"
+            f"{email_text}"
+        )
+
+    def get_candidate_email(self, candidate_name):
+        """Получает email кандидата (заглушка - в реальности должна быть БД)"""
+    # В демо-версии возвращаем тестовый email
+    # В реальности здесь должен быть поиск по БД
+        return f"{candidate_name.lower().replace(' ', '.')}@example.com"
+
+    def attach_offer_file(self, interview):
+        """Прикрепляет файл с оффером к собеседованию"""
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Выберите файл с оффером",
+            "",
+            "Word Documents (*.docx);;PDF Files (*.pdf);;All files (*.*)"
+        )
+    
+        if filename:
+            # Сохраняем путь к файлу в данных собеседования
+            date_str = self.calendar.selectedDate().toString("yyyy-MM-dd")
+            for i in self.interviews.get(date_str, []):
+                if i.get('id') == interview.get('id'):
+                    i['offer_file'] = filename
+                    break
+        
+            self.save_interviews()
+        
+            QMessageBox.information(
+                self,
+                "Файл прикреплен",
+                f"✅ Файл {os.path.basename(filename)} успешно прикреплен к собеседованию"
+            )
     def send_request(self):
         """Отправляет запрос на перенос"""
         reason = self.reason_combo.currentText()

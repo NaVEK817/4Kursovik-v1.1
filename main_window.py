@@ -3,6 +3,7 @@
 Главное окно приложения с таблицей вакансий и контекстным меню
 """
 import json
+import os
 from datetime import datetime
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QTableWidget, QTableWidgetItem, QHeaderView,
@@ -13,8 +14,8 @@ from PyQt5.QtCore import Qt, pyqtSignal, QPoint
 from PyQt5.QtGui import QCursor, QColor
 import styles
 
-# Импорты для кэша анализа
-from ai_agent_window import analysis_cache
+# Файл для хранения статусов анализа
+ANALYSIS_STATUS_FILE = "analysis_status.json"
 
 # Импорты для новых окон
 from ai_schedule_manager import AIScheduleManager
@@ -48,7 +49,7 @@ class VacancyDetailDialog(QDialog):
         info_text.setReadOnly(True)
         info_text.setStyleSheet(f"background-color: {styles.S7_WHITE};")
 
-        # Формирование текста без поля source
+        # Формирование текста
         info = f"""
         <table width="100%" cellpadding="5">
             <tr><td width="150"><b>ID:</b></td><td>{self.vacancy.get('id', '')}</td></tr>
@@ -97,9 +98,27 @@ class MainWindow(QMainWindow):
         self.user_data = user_data
         self.vacancies = []
         self.schedule_manager = AIScheduleManager()
-        self.analyzed_vacancies = set()  # Множество ID вакансий, по которым проводился анализ
+        self.analysis_status = self.load_analysis_status()  # Загружаем статусы
         self.init_ui()
         self.load_vacancies()
+
+    def load_analysis_status(self):
+        """Загружает статусы анализа из файла"""
+        if os.path.exists(ANALYSIS_STATUS_FILE):
+            try:
+                with open(ANALYSIS_STATUS_FILE, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                return {}
+        return {}
+
+    def save_analysis_status(self):
+        """Сохраняет статусы анализа в файл"""
+        try:
+            with open(ANALYSIS_STATUS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(self.analysis_status, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Ошибка сохранения статусов: {e}")
 
     def init_ui(self):
         """Инициализация интерфейса"""
@@ -174,7 +193,7 @@ class MainWindow(QMainWindow):
 
         # Установка колонок
         columns = ["ID", "Название", "Зарплата", "Город", "Опыт", "График",
-                   "Занятость", "Дата публикации", "Навыки", "Анализ"]
+                   "Занятость", "Дата публикации", "Навыки", "Статус анализа"]
         self.table.setColumnCount(len(columns))
         self.table.setHorizontalHeaderLabels(columns)
 
@@ -189,7 +208,7 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # Занятость
         header.setSectionResizeMode(7, QHeaderView.ResizeToContents)  # Дата
         header.setSectionResizeMode(8, QHeaderView.Stretch)  # Навыки
-        header.setSectionResizeMode(9, QHeaderView.ResizeToContents)  # Анализ
+        header.setSectionResizeMode(9, QHeaderView.ResizeToContents)  # Статус анализа
 
         main_layout.addWidget(self.table)
 
@@ -297,7 +316,7 @@ class MainWindow(QMainWindow):
         row = self.table.currentRow()
         if row >= 0:
             vacancy = self.vacancies[row]
-            vacancy_id = vacancy.get('id', '')
+            vacancy_id = str(vacancy.get('id', ''))
             
             menu = QMenu()
 
@@ -306,11 +325,26 @@ class MainWindow(QMainWindow):
 
             menu.addSeparator()
 
-            ai_action = menu.addAction("🤖 Анализ кандидатов для этой вакансии")
+            ai_action = menu.addAction("🤖 Запустить анализ кандидатов")
             ai_action.triggered.connect(self.analyze_candidates_for_vacancy)
 
-            # Если анализ уже проводился, добавляем пункты создания оффера
-            if vacancy_id in self.analyzed_vacancies or vacancy_id in analysis_cache:
+            # Если анализ завершен, показываем кнопку загрузки из кэша
+            if self.analysis_status.get(vacancy_id) == 'completed':
+                cache_action = menu.addAction("💾 Загрузить результаты из кэша")
+                cache_action.triggered.connect(self.load_from_cache)
+
+            # Если анализ прерван
+            if self.analysis_status.get(vacancy_id) == 'interrupted':
+                status_action = menu.addAction("⚠️ Анализ был прерван (запустите заново)")
+                status_action.setEnabled(False)
+
+            # Если анализ в процессе
+            if self.analysis_status.get(vacancy_id) == 'in_progress':
+                status_action = menu.addAction("⏳ Анализ в процессе...")
+                status_action.setEnabled(False)
+
+            # Если анализ завершен, добавляем пункты создания оффера
+            if self.analysis_status.get(vacancy_id) == 'completed':
                 menu.addSeparator()
                 
                 # Для лучшего кандидата
@@ -338,91 +372,144 @@ class MainWindow(QMainWindow):
             try:
                 from ai_agent_window import AIAgentWindow
                 vacancy = self.vacancies[row]
+                vacancy_id = str(vacancy.get('id', ''))
+                
+                # Устанавливаем статус "в процессе"
+                self.analysis_status[vacancy_id] = 'in_progress'
+                self.save_analysis_status()
+                self.update_table()
+                
                 self.ai_window = AIAgentWindow(vacancy)
                 
-                # Подключаем сигнал закрытия для обновления статуса анализа
-                self.ai_window.destroyed.connect(lambda: self.mark_vacancy_analyzed(vacancy.get('id')))
+                # Подключаем сигналы для обновления статуса
+                self.ai_window.analysis_completed.connect(lambda: self.mark_vacancy_analyzed(vacancy_id, 'completed'))
+                self.ai_window.analysis_interrupted.connect(lambda: self.mark_vacancy_analyzed(vacancy_id, 'interrupted'))
+                self.ai_window.destroyed.connect(lambda: self.check_analysis_status(vacancy_id))
                 
                 self.ai_window.show()
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", f"Не удалось открыть анализ: {str(e)}")
+                # В случае ошибки сбрасываем статус
+                vacancy_id = str(self.vacancies[row].get('id', ''))
+                self.analysis_status.pop(vacancy_id, None)
+                self.save_analysis_status()
+                self.update_table()
 
-    def mark_vacancy_analyzed(self, vacancy_id):
+    def check_analysis_status(self, vacancy_id):
+        """Проверяет статус анализа при закрытии окна"""
+        # Если окно закрылось, а статус все еще 'in_progress', значит анализ был прерван
+        if self.analysis_status.get(vacancy_id) == 'in_progress':
+            self.analysis_status[vacancy_id] = 'interrupted'
+            self.save_analysis_status()
+            self.update_table()
+
+    def load_from_cache(self):
+        """Загружает результаты анализа из кэша"""
+        row = self.table.currentRow()
+        if row >= 0:
+            try:
+                from ai_agent_window import AIAgentWindow
+                vacancy = self.vacancies[row]
+                self.ai_window = AIAgentWindow(vacancy)
+                self.ai_window.load_from_cache()  # Вызываем метод загрузки из кэша
+                self.ai_window.show()
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить из кэша: {str(e)}")
+
+    def mark_vacancy_analyzed(self, vacancy_id, status='completed'):
         """Отмечает вакансию как проанализированную"""
         if vacancy_id:
-            self.analyzed_vacancies.add(vacancy_id)
-            self.update_table()  # Обновляем таблицу для изменения цвета
+            self.analysis_status[vacancy_id] = status
+            self.save_analysis_status()
+            self.update_table()
 
     def create_offer_for_best_candidate(self, vacancy):
         """Создает оффер для лучшего кандидата"""
-        vacancy_id = vacancy.get('id')
+        vacancy_id = str(vacancy.get('id'))
         
-        if vacancy_id not in analysis_cache:
-            QMessageBox.warning(self, "Ошибка", "Данные анализа не найдены в кэше")
+        # Проверяем наличие файла с результатами анализа
+        cache_file = f"analysis_cache_{vacancy_id}.json"
+        if not os.path.exists(cache_file):
+            QMessageBox.warning(self, "Ошибка", "Файл с результатами анализа не найден")
             return
         
-        results = analysis_cache[vacancy_id]
-        if not results:
-            QMessageBox.warning(self, "Ошибка", "Нет результатов анализа")
-            return
-        
-        # Берем лучшего кандидата
-        best_candidate = results[0]['candidate']
-        
-        reply = QMessageBox.question(
-            self,
-            "Создание оффера",
-            f"Вы хотите создать оффер для лучшего кандидата?\n\n"
-            f"🏆 {best_candidate.get('last_name', '')} {best_candidate.get('first_name', '')}\n"
-            f"📊 Рейтинг: {results[0]['score']}%\n\n"
-            f"Продолжить?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        
-        if reply == QMessageBox.Yes:
-            self.open_offer_window(vacancy, best_candidate)
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                results = json.load(f)
+            
+            if not results:
+                QMessageBox.warning(self, "Ошибка", "Нет результатов анализа")
+                return
+            
+            # Берем лучшего кандидата
+            best_candidate = results[0]['candidate']
+            
+            reply = QMessageBox.question(
+                self,
+                "Создание оффера",
+                f"Вы хотите создать оффер для лучшего кандидата?\n\n"
+                f"🏆 {self.format_candidate_name(best_candidate)}\n"
+                f"📊 Рейтинг: {results[0]['score']}%\n\n"
+                f"Продолжить?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            
+            if reply == QMessageBox.Yes:
+                self.open_offer_window(vacancy, best_candidate)
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить результаты: {str(e)}")
 
     def create_offer_for_selected_candidate(self, vacancy):
         """Создает оффер для выбранного кандидата из топа"""
-        vacancy_id = vacancy.get('id')
+        vacancy_id = str(vacancy.get('id'))
         
-        if vacancy_id not in analysis_cache:
-            QMessageBox.warning(self, "Ошибка", "Данные анализа не найдены в кэше")
+        cache_file = f"analysis_cache_{vacancy_id}.json"
+        if not os.path.exists(cache_file):
+            QMessageBox.warning(self, "Ошибка", "Файл с результатами анализа не найден")
             return
         
-        results = analysis_cache[vacancy_id]
-        if not results:
-            QMessageBox.warning(self, "Ошибка", "Нет результатов анализа")
-            return
-        
-        # Формируем список кандидатов для выбора
-        candidates_list = []
-        for i, r in enumerate(results[:10], 1):
-            candidate = r['candidate']
-            name = f"{candidate.get('last_name', '')} {candidate.get('first_name', '')}".strip()
-            if not name:
-                name = candidate.get('name', 'Неизвестно')
-            candidates_list.append(f"{i}. {name} (рейтинг: {r['score']}%)")
-        
-        # Запрашиваем номер кандидата
-        number, ok = QInputDialog.getItem(
-            self,
-            "Выбор кандидата",
-            "Выберите кандидата из топа:",
-            candidates_list,
-            0,
-            False
-        )
-        
-        if ok and number:
-            # Извлекаем индекс
-            try:
-                index = int(number.split('.')[0]) - 1
-                if 0 <= index < len(results):
-                    selected_candidate = results[index]['candidate']
-                    self.open_offer_window(vacancy, selected_candidate)
-            except:
-                QMessageBox.warning(self, "Ошибка", "Не удалось определить кандидата")
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                results = json.load(f)
+            
+            if not results:
+                QMessageBox.warning(self, "Ошибка", "Нет результатов анализа")
+                return
+            
+            # Формируем список кандидатов для выбора
+            candidates_list = []
+            for i, r in enumerate(results[:10], 1):
+                candidate = r['candidate']
+                name = self.format_candidate_name(candidate)
+                candidates_list.append(f"{i}. {name} (рейтинг: {r['score']}%)")
+            
+            # Запрашиваем номер кандидата
+            number, ok = QInputDialog.getItem(
+                self,
+                "Выбор кандидата",
+                "Выберите кандидата из топа:",
+                candidates_list,
+                0,
+                False
+            )
+            
+            if ok and number:
+                # Извлекаем индекс
+                try:
+                    index = int(number.split('.')[0]) - 1
+                    if 0 <= index < len(results):
+                        selected_candidate = results[index]['candidate']
+                        self.open_offer_window(vacancy, selected_candidate)
+                except:
+                    QMessageBox.warning(self, "Ошибка", "Не удалось определить кандидата")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить результаты: {str(e)}")
+
+    def format_candidate_name(self, candidate):
+        """Форматирует имя кандидата"""
+        if 'first_name' in candidate and 'last_name' in candidate:
+            return f"{candidate.get('last_name', '')} {candidate.get('first_name', '')}".strip()
+        return candidate.get('name', 'Неизвестно')
 
     def open_offer_window(self, vacancy, candidate):
         """Открывает окно создания оффера"""
@@ -466,49 +553,105 @@ class MainWindow(QMainWindow):
             self.table.setItem(row, 1, title_item)
 
             # Зарплата
-            self.table.setItem(row, 2, QTableWidgetItem(vacancy.get('salary', '')))
+            salary = vacancy.get('salary', '')
+            if isinstance(salary, dict):
+                salary_from = salary.get('from', '')
+                salary_to = salary.get('to', '')
+                salary_currency = salary.get('currency', '')
+                if salary_from and salary_to:
+                    salary_text = f"{salary_from} - {salary_to} {salary_currency}"
+                elif salary_from:
+                    salary_text = f"от {salary_from} {salary_currency}"
+                elif salary_to:
+                    salary_text = f"до {salary_to} {salary_currency}"
+                else:
+                    salary_text = "Не указана"
+            else:
+                salary_text = str(salary) if salary else "Не указана"
+            self.table.setItem(row, 2, QTableWidgetItem(salary_text))
 
             # Город
-            self.table.setItem(row, 3, QTableWidgetItem(vacancy.get('area', '')))
+            area = vacancy.get('area', {})
+            if isinstance(area, dict):
+                city = area.get('name', 'Не указан')
+            else:
+                city = str(area) if area else "Не указан"
+            self.table.setItem(row, 3, QTableWidgetItem(city))
 
             # Опыт
-            self.table.setItem(row, 4, QTableWidgetItem(vacancy.get('experience', '')))
+            experience = vacancy.get('experience', {})
+            if isinstance(experience, dict):
+                exp_text = experience.get('name', 'Не указан')
+            else:
+                exp_text = str(experience) if experience else "Не указан"
+            self.table.setItem(row, 4, QTableWidgetItem(exp_text))
 
             # График
-            self.table.setItem(row, 5, QTableWidgetItem(vacancy.get('schedule', '')))
+            schedule = vacancy.get('schedule', {})
+            if isinstance(schedule, dict):
+                schedule_text = schedule.get('name', 'Не указан')
+            else:
+                schedule_text = str(schedule) if schedule else "Не указан"
+            self.table.setItem(row, 5, QTableWidgetItem(schedule_text))
 
             # Занятость
-            self.table.setItem(row, 6, QTableWidgetItem(vacancy.get('employment', '')))
+            employment = vacancy.get('employment', {})
+            if isinstance(employment, dict):
+                employment_text = employment.get('name', 'Не указана')
+            else:
+                employment_text = str(employment) if employment else "Не указана"
+            self.table.setItem(row, 6, QTableWidgetItem(employment_text))
 
             # Дата публикации
             date_str = vacancy.get('published_at', '')
             if date_str:
                 try:
-                    date = datetime.fromisoformat(date_str.replace('+0300', '+03:00'))
+                    date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
                     date_str = date.strftime('%d.%m.%Y')
                 except:
                     pass
             self.table.setItem(row, 7, QTableWidgetItem(date_str))
 
             # Навыки
-            skills = vacancy.get('skills', '')
-            skills_item = QTableWidgetItem(skills)
-            skills_item.setToolTip(skills)
+            skills = vacancy.get('skills', [])
+            if isinstance(skills, list):
+                skills_text = ", ".join([s.get('name', '') if isinstance(s, dict) else str(s) for s in skills[:5]])
+                if len(skills) > 5:
+                    skills_text += f" и еще {len(skills) - 5}"
+            else:
+                skills_text = str(skills) if skills else "Не указаны"
+            skills_item = QTableWidgetItem(skills_text)
+            skills_item.setToolTip(skills_text)
             self.table.setItem(row, 8, skills_item)
             
             # Статус анализа
-            if vacancy_id in self.analyzed_vacancies or vacancy_id in analysis_cache:
-                status_item = QTableWidgetItem("✅ Анализ проведен")
+            status = self.analysis_status.get(vacancy_id, 'not_started')
+            
+            if status == 'completed':
+                status_item = QTableWidgetItem("✅ Анализ завершен")
                 status_item.setForeground(QColor(styles.S7_GREEN))
-                status_item.setTextAlignment(Qt.AlignCenter)
                 # Подсвечиваем всю строку бледно-зеленым
                 for col in range(self.table.columnCount()):
                     item = self.table.item(row, col)
                     if item:
-                        item.setBackground(QColor(240, 255, 240))  # Бледно-зеленый
+                        item.setBackground(QColor(240, 255, 240))
+            elif status == 'in_progress':
+                status_item = QTableWidgetItem("⏳ Анализируется...")
+                status_item.setForeground(QColor("#FFA500"))
+                for col in range(self.table.columnCount()):
+                    item = self.table.item(row, col)
+                    if item:
+                        item.setBackground(QColor(255, 255, 200))
+            elif status == 'interrupted':
+                status_item = QTableWidgetItem("⚠️ Анализ прерван")
+                status_item.setForeground(QColor(styles.S7_RED))
+                for col in range(self.table.columnCount()):
+                    item = self.table.item(row, col)
+                    if item:
+                        item.setBackground(QColor(255, 220, 220))
             else:
-                status_item = QTableWidgetItem("⏳ Не анализировалась")
+                status_item = QTableWidgetItem("⏳ Не проводился")
                 status_item.setForeground(QColor(styles.S7_GRAY))
-                status_item.setTextAlignment(Qt.AlignCenter)
             
+            status_item.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(row, 9, status_item)
