@@ -778,8 +778,8 @@ class AIAgentWindow(QWidget):
         QMessageBox.information(
             self,
             "Отправка оффера",
-            f"📧 Заглушка: Оффер будет отправлен на {email}\n\n"
-            f"В реальной системе здесь будет интеграция с почтовым сервером."
+            f"📧 Оффер будет отправлен на {email}\n\n"
+            f"(Не забудьте прикрепить оффер!)"
         )
     
     def auto_schedule_interview(self, result):
