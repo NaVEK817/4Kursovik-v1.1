@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QFormLayout, QComboBox, QDateEdit, QTimeEdit,
                              QDialogButtonBox)
 from PyQt5.QtCore import Qt, QDate, QTime
-from PyQt5.QtGui import QColor  # ❗ ВАЖНО: добавить этот импорт
+from PyQt5.QtGui import QColor
 import styles
 from datetime import datetime
 

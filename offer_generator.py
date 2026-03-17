@@ -35,14 +35,11 @@ class OfferGenerator:
 Благодарим за интерес к вакансии "{vacancy_title}" в S7 Airlines.
 
 Мы рады пригласить Вас на собеседование:
-
 📅 Дата: {interview['date']}
 ⏰ Время: {interview['time']}
 👥 Собеседующий: {interview['recruiter']}
 📍 Место: {interview.get('place', 'Офис S7 Airlines')}
-
 Пожалуйста, подтвердите Ваше участие ответным письмом.
-
 С уважением,
 Команда S7 Recruitment
 """

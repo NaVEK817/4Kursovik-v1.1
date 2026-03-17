@@ -77,13 +77,7 @@ class AuthWindow(QWidget):
         self.login_button.clicked.connect(self.check_credentials)
         self.login_button.setCursor(Qt.PointingHandCursor)
         layout.addWidget(self.login_button)
-        
-        # Информация для демо
-        info_label = QLabel("Демо-доступ: пользователь '1', пароль '1'")
-        info_label.setAlignment(Qt.AlignCenter)
-        info_label.setStyleSheet(f"color: {styles.S7_GRAY}; font-size: 11px; margin-top: 10px;")
-        layout.addWidget(info_label)
-        
+            
         self.setLayout(layout)
         
     def check_credentials(self):

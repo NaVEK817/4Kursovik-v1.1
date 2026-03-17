@@ -1,29 +1,32 @@
 # -*- coding: utf-8 -*-
 """
-Окно оформления документов для кандидатов
+Окно создания оффера для кандидата
 """
 import json
 from datetime import datetime
 from docx import Document
-from docx.shared import Inches, Pt
+from docx.shared import Inches, Pt, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-                             QLineEdit, QPushButton, QTextEdit, QComboBox,
-                             QMessageBox, QFileDialog, QGroupBox)
-from PyQt5.QtCore import Qt, pyqtSignal
+                             QLineEdit, QPushButton, QTextEdit, 
+                             QMessageBox, QFileDialog, QGroupBox, QDateEdit,
+                             QSpinBox, QFormLayout)
+from PyQt5.QtCore import Qt, QDate
 import styles
 
 class DocumentWindow(QWidget):
-    """Окно оформления документов"""
+    """Окно создания оффера для кандидата"""
     
-    def __init__(self, vacancies):
+    def __init__(self, vacancy, candidate):
         super().__init__()
-        self.vacancies = vacancies
+        self.vacancy = vacancy
+        self.candidate = candidate
         self.init_ui()
         
     def init_ui(self):
         """Инициализация интерфейса"""
-        self.setWindowTitle("S7 Recruitment - Оформление документа")
-        self.setGeometry(200, 200, 900, 700)
+        self.setWindowTitle("S7 Recruitment - Создание оффера")
+        self.setGeometry(200, 200, 600, 700)
         self.setStyleSheet(styles.MAIN_STYLE)
         
         # Основной layout
@@ -32,182 +35,164 @@ class DocumentWindow(QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         
         # Заголовок
-        header_label = QLabel("📄 Оформление документа для кандидата")
+        header_label = QLabel("📄 Создание оффера для кандидата")
         header_label.setObjectName("headerLabel")
         layout.addWidget(header_label)
         
-        # Группа поиска
-        search_group = QGroupBox("Поиск вакансии")
-        search_layout = QVBoxLayout()
+        # Информация о кандидате (только для просмотра)
+        candidate_group = QGroupBox("Информация о кандидате")
+        candidate_layout = QFormLayout()
         
-        # Поиск по названию
-        search_row = QHBoxLayout()
-        search_row.addWidget(QLabel("Поиск вакансии:"))
+        # Формируем ФИО
+        full_name = f"{self.candidate.get('last_name', '')} {self.candidate.get('first_name', '')} {self.candidate.get('middle_name', '')}".strip()
+        if not full_name:
+            full_name = "Кандидат"
         
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Введите название вакансии или ключевые слова...")
-        self.search_input.textChanged.connect(self.search_vacancies)
-        search_row.addWidget(self.search_input)
+        name_label = QLabel(full_name)
+        name_label.setStyleSheet(f"font-weight: bold; color: {styles.S7_GREEN};")
+        candidate_layout.addRow("👤 ФИО:", name_label)
         
-        search_layout.addLayout(search_row)
+        # Желаемая должность
+        desired_title = self.candidate.get('title', 'Не указана')
+        candidate_layout.addRow("💼 Желаемая должность:", QLabel(desired_title))
         
-        # Выбор вакансии из результатов
-        search_layout.addWidget(QLabel("Выберите вакансию:"))
-        self.vacancy_combo = QComboBox()
-        self.vacancy_combo.setEditable(False)
-        self.vacancy_combo.currentIndexChanged.connect(self.load_vacancy_details)
-        search_layout.addWidget(self.vacancy_combo)
+        # Город
+        city = self.candidate.get('area', 'Не указан')
+        candidate_layout.addRow("🏙️ Город:", QLabel(city))
         
-        search_group.setLayout(search_layout)
-        layout.addWidget(search_group)
+        # Опыт
+        total_years = 0
+        experience = self.candidate.get('experience', [])
+        if isinstance(experience, list):
+            for exp in experience:
+                if isinstance(exp, dict):
+                    start = exp.get('start', '')
+                    end = exp.get('end', '')
+                    if start and len(start) >= 4:
+                        start_year = int(start[:4])
+                        if end and end != 'null' and end:
+                            if len(end) >= 4:
+                                end_year = int(end[:4])
+                            else:
+                                end_year = 2026
+                        else:
+                            end_year = 2026
+                        total_years += end_year - start_year
         
-        # Информация о вакансии
-        info_group = QGroupBox("Информация о вакансии")
-        info_layout = QVBoxLayout()
-        
-        self.vacancy_info = QTextEdit()
-        self.vacancy_info.setReadOnly(True)
-        self.vacancy_info.setMinimumHeight(200)
-        info_layout.addWidget(self.vacancy_info)
-        
-        info_group.setLayout(info_layout)
-        layout.addWidget(info_group)
-        
-        # Данные кандидата
-        candidate_group = QGroupBox("Данные кандидата")
-        candidate_layout = QVBoxLayout()
-        
-        name_layout = QHBoxLayout()
-        name_layout.addWidget(QLabel("ФИО кандидата:"))
-        self.candidate_name = QLineEdit()
-        self.candidate_name.setPlaceholderText("Введите ФИО кандидата")
-        name_layout.addWidget(self.candidate_name)
-        candidate_layout.addLayout(name_layout)
-        
-        email_layout = QHBoxLayout()
-        email_layout.addWidget(QLabel("Email:"))
-        self.candidate_email = QLineEdit()
-        self.candidate_email.setPlaceholderText("Введите email")
-        email_layout.addWidget(self.candidate_email)
-        candidate_layout.addLayout(email_layout)
-        
-        phone_layout = QHBoxLayout()
-        phone_layout.addWidget(QLabel("Телефон:"))
-        self.candidate_phone = QLineEdit()
-        self.candidate_phone.setPlaceholderText("Введите телефон")
-        phone_layout.addWidget(self.candidate_phone)
-        candidate_layout.addLayout(phone_layout)
+        candidate_layout.addRow("📊 Опыт работы:", QLabel(f"{total_years} лет"))
         
         candidate_group.setLayout(candidate_layout)
         layout.addWidget(candidate_group)
         
-        # Кнопки действий
+        # Информация о вакансии (только для просмотра)
+        vacancy_group = QGroupBox("Информация о вакансии")
+        vacancy_layout = QFormLayout()
+        
+        vacancy_title = QLabel(self.vacancy.get('title', 'Не указана'))
+        vacancy_title.setStyleSheet(f"font-weight: bold; color: {styles.S7_GREEN};")
+        vacancy_layout.addRow("📋 Вакансия:", vacancy_title)
+        
+        vacancy_city = self.vacancy.get('area', 'Не указан')
+        vacancy_layout.addRow("🏙️ Город работы:", QLabel(vacancy_city))
+        
+        vacancy_salary = self.vacancy.get('salary', 'Не указана')
+        vacancy_layout.addRow("💰 Зарплата:", QLabel(vacancy_salary))
+        
+        vacancy_schedule = self.vacancy.get('schedule', 'Не указан')
+        vacancy_layout.addRow("⏰ График:", QLabel(vacancy_schedule))
+        
+        vacancy_group.setLayout(vacancy_layout)
+        layout.addWidget(vacancy_group)
+        
+        # Параметры оффера
+        offer_group = QGroupBox("Параметры оффера")
+        offer_layout = QFormLayout()
+        
+        # Дата начала работы
+        self.start_date = QDateEdit()
+        self.start_date.setDate(QDate.currentDate().addDays(14))  # Через 2 недели
+        self.start_date.setCalendarPopup(True)
+        offer_layout.addRow("📅 Предполагаемая дата выхода:", self.start_date)
+        
+        # Испытательный срок
+        self.probation_period = QSpinBox()
+        self.probation_period.setRange(1, 6)
+        self.probation_period.setValue(3)
+        self.probation_period.setSuffix(" месяца")
+        offer_layout.addRow("⏱️ Испытательный срок:", self.probation_period)
+        
+        # Зарплатное предложение
+        self.salary_offer = QLineEdit()
+        self.salary_offer.setPlaceholderText("Например: 80 000 руб.")
+        # Пытаемся извлечь зарплату из вакансии
+        vacancy_salary = self.vacancy.get('salary', '')
+        if vacancy_salary:
+            self.salary_offer.setText(vacancy_salary)
+        offer_layout.addRow("💰 Предложение по зарплате:", self.salary_offer)
+        
+        offer_group.setLayout(offer_layout)
+        layout.addWidget(offer_group)
+        
+        # Дополнительные условия
+        conditions_group = QGroupBox("Дополнительные условия")
+        conditions_layout = QVBoxLayout()
+        
+        self.conditions_text = QTextEdit()
+        self.conditions_text.setMaximumHeight(100)
+        self.conditions_text.setPlaceholderText("ДМС, бонусы, дополнительные льготы...")
+        conditions_layout.addWidget(self.conditions_text)
+        
+        conditions_group.setLayout(conditions_layout)
+        layout.addWidget(conditions_group)
+        
+        # Комментарий
+        comment_group = QGroupBox("Комментарий для кандидата")
+        comment_layout = QVBoxLayout()
+        
+        self.comment_text = QTextEdit()
+        self.comment_text.setMaximumHeight(80)
+        self.comment_text.setPlaceholderText("Персональное обращение к кандидату...")
+        comment_layout.addWidget(self.comment_text)
+        
+        comment_group.setLayout(comment_layout)
+        layout.addWidget(comment_group)
+        
+        # Кнопки
         buttons_layout = QHBoxLayout()
         
-        self.create_btn = QPushButton("📄 Создать документ")
-        self.create_btn.clicked.connect(self.create_document)
+        self.create_btn = QPushButton("📄 Создать оффер")
+        self.create_btn.clicked.connect(self.create_offer)
         self.create_btn.setCursor(Qt.PointingHandCursor)
         buttons_layout.addWidget(self.create_btn)
         
         buttons_layout.addStretch()
         
-        self.clear_btn = QPushButton("🔄 Очистить")
-        self.clear_btn.clicked.connect(self.clear_form)
-        self.clear_btn.setCursor(Qt.PointingHandCursor)
-        buttons_layout.addWidget(self.clear_btn)
+        self.cancel_btn = QPushButton("✖ Отмена")
+        self.cancel_btn.clicked.connect(self.close)
+        self.cancel_btn.setCursor(Qt.PointingHandCursor)
+        buttons_layout.addWidget(self.cancel_btn)
         
         layout.addLayout(buttons_layout)
         
         self.setLayout(layout)
-        
-        # Загрузка вакансий в комбобокс
-        self.update_vacancy_list()
     
-    def update_vacancy_list(self):
-        """Обновление списка вакансий"""
-        self.vacancy_combo.clear()
-        self.vacancy_combo.addItem("Выберите вакансию...", None)
-        
-        for vacancy in self.vacancies:
-            title = vacancy.get('title', 'Без названия')
-            area = vacancy.get('area', '')
-            display_text = f"{title} ({area})" if area else title
-            self.vacancy_combo.addItem(display_text, vacancy)
-    
-    def search_vacancies(self):
-        """Поиск вакансий по названию"""
-        search_text = self.search_input.text().lower()
-        
-        self.vacancy_combo.clear()
-        self.vacancy_combo.addItem("Выберите вакансию...", None)
-        
-        if not search_text:
-            # Если поиск пустой, показываем все вакансии
-            for vacancy in self.vacancies:
-                title = vacancy.get('title', 'Без названия')
-                area = vacancy.get('area', '')
-                display_text = f"{title} ({area})" if area else title
-                self.vacancy_combo.addItem(display_text, vacancy)
-        else:
-            # Фильтруем вакансии
-            for vacancy in self.vacancies:
-                title = vacancy.get('title', '').lower()
-                if search_text in title:
-                    area = vacancy.get('area', '')
-                    display_text = f"{vacancy.get('title', 'Без названия')} ({area})" if area else vacancy.get('title', 'Без названия')
-                    self.vacancy_combo.addItem(display_text, vacancy)
-    
-    def load_vacancy_details(self, index):
-        """Загрузка деталей выбранной вакансии"""
-        if index <= 0:
-            self.vacancy_info.clear()
+    def create_offer(self):
+        """Создание документа-оффера"""
+        # Проверка заполнения
+        if not self.salary_offer.text().strip():
+            QMessageBox.warning(self, "Предупреждение", "Укажите зарплатное предложение")
             return
         
-        vacancy = self.vacancy_combo.currentData()
-        if vacancy:
-            info = f"""
-            <h2 style='color: {styles.S7_GREEN};'>{vacancy.get('title', '')}</h2>
-            
-            <p><b>ID:</b> {vacancy.get('id', '')}</p>
-            <p><b>Город:</b> {vacancy.get('area', '')}</p>
-            <p><b>Зарплата:</b> {vacancy.get('salary', 'Не указана')}</p>
-            <p><b>Опыт:</b> {vacancy.get('experience', '')}</p>
-            <p><b>График:</b> {vacancy.get('schedule', '')}</p>
-            <p><b>Занятость:</b> {vacancy.get('employment', '')}</p>
-            
-            <h3>Требования:</h3>
-            <p>{vacancy.get('requirements', 'Не указаны')}</p>
-            
-            <h3>Обязанности:</h3>
-            <p>{vacancy.get('responsibilities', 'Не указаны')}</p>
-            
-            <h3>Условия:</h3>
-            <p>{vacancy.get('conditions', 'Не указаны')}</p>
-            
-            <h3>Навыки:</h3>
-            <p>{vacancy.get('skills', 'Не указаны')}</p>
-            """
-            
-            self.vacancy_info.setHtml(info)
-    
-    def create_document(self):
-        """Создание документа Word с информацией о вакансии"""
-        # Проверка заполнения полей
-        if self.vacancy_combo.currentIndex() <= 0:
-            QMessageBox.warning(self, "Предупреждение", "Выберите вакансию")
-            return
+        # Формируем ФИО кандидата
+        full_name = f"{self.candidate.get('last_name', '')} {self.candidate.get('first_name', '')} {self.candidate.get('middle_name', '')}".strip()
+        if not full_name:
+            full_name = "Кандидат"
         
-        if not self.candidate_name.text().strip():
-            QMessageBox.warning(self, "Предупреждение", "Введите ФИО кандидата")
-            return
-        
-        vacancy = self.vacancy_combo.currentData()
-        
-        # Выбор места сохранения файла
+        # Выбор места сохранения
         filename, _ = QFileDialog.getSaveFileName(
             self, 
-            "Сохранить документ",
-            f"Кандидат_{self.candidate_name.text().strip()}_{vacancy.get('title', '')[:30]}.docx",
+            "Сохранить оффер",
+            f"Оффер_{full_name}_{self.vacancy.get('title', '')[:30]}.docx",
             "Word Documents (*.docx)"
         )
         
@@ -218,83 +203,119 @@ class DocumentWindow(QWidget):
             # Создание документа
             doc = Document()
             
+            # Установка стилей
+            style = doc.styles['Normal']
+            style.font.name = 'Calibri'
+            style.font.size = Pt(11)
+            
             # Заголовок
-            doc.add_heading('S7 Recruitment - Информация о вакансии', 0)
+            title = doc.add_heading('ПРЕДЛОЖЕНИЕ О РАБОТЕ (JOB OFFER)', 0)
+            title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            title.runs[0].font.color.rgb = RGBColor(0, 166, 81)  # S7 Green
             
-            # Дата создания
-            doc.add_paragraph(f"Дата создания: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+            doc.add_paragraph()
             
-            # Информация о кандидате
-            doc.add_heading('Данные кандидата', level=1)
-            doc.add_paragraph(f"ФИО: {self.candidate_name.text().strip()}")
-            doc.add_paragraph(f"Email: {self.candidate_email.text().strip()}")
-            doc.add_paragraph(f"Телефон: {self.candidate_phone.text().strip()}")
+            # Дата
+            date_para = doc.add_paragraph(f'г. Москва, {datetime.now().strftime("%d.%m.%Y")}')
+            date_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
             
-            # Информация о вакансии
-            doc.add_heading('Информация о вакансии', level=1)
+            doc.add_paragraph()
             
-            doc.add_heading('Основная информация', level=2)
-            doc.add_paragraph(f"Название: {vacancy.get('title', '')}")
-            doc.add_paragraph(f"ID вакансии: {vacancy.get('id', '')}")
-            doc.add_paragraph(f"Город: {vacancy.get('area', '')}")
-            doc.add_paragraph(f"Зарплата: {vacancy.get('salary', 'Не указана')}")
-            doc.add_paragraph(f"Опыт: {vacancy.get('experience', '')}")
-            doc.add_paragraph(f"График: {vacancy.get('schedule', '')}")
-            doc.add_paragraph(f"Занятость: {vacancy.get('employment', '')}")
+            # Обращение
+            doc.add_paragraph(f'Уважаемый(ая) {full_name}!')
+            doc.add_paragraph()
             
-            # Требования
-            doc.add_heading('Требования', level=2)
-            if vacancy.get('requirements'):
-                doc.add_paragraph(vacancy.get('requirements'))
-            else:
-                doc.add_paragraph('Не указаны')
+            # Основной текст
+            doc.add_paragraph(
+                'Мы рады предложить Вам присоединиться к команде S7 Airlines в качестве '
+                f'**{self.vacancy.get("title", "сотрудника")}**.'
+            )
+            doc.add_paragraph()
             
-            # Обязанности
-            doc.add_heading('Обязанности', level=2)
-            if vacancy.get('responsibilities'):
-                doc.add_paragraph(vacancy.get('responsibilities'))
-            else:
-                doc.add_paragraph('Не указаны')
+            # Условия работы
+            doc.add_heading('Условия работы:', level=1)
             
-            # Условия
-            doc.add_heading('Условия работы', level=2)
-            if vacancy.get('conditions'):
-                doc.add_paragraph(vacancy.get('conditions'))
-            else:
-                doc.add_paragraph('Не указаны')
+            conditions_table = doc.add_table(rows=4, cols=2)
+            conditions_table.style = 'Light Grid Accent 1'
             
-            # Навыки
-            doc.add_heading('Ключевые навыки', level=2)
-            if vacancy.get('skills'):
-                doc.add_paragraph(vacancy.get('skills'))
-            else:
-                doc.add_paragraph('Не указаны')
+            # Заполняем таблицу
+            cells = conditions_table.rows[0].cells
+            cells[0].text = 'Должность'
+            cells[0].paragraphs[0].runs[0].font.bold = True
+            cells[1].text = self.vacancy.get('title', 'Не указана')
+            
+            cells = conditions_table.rows[1].cells
+            cells[0].text = 'Место работы'
+            cells[0].paragraphs[0].runs[0].font.bold = True
+            cells[1].text = self.vacancy.get('area', 'Не указано')
+            
+            cells = conditions_table.rows[2].cells
+            cells[0].text = 'График работы'
+            cells[0].paragraphs[0].runs[0].font.bold = True
+            cells[1].text = self.vacancy.get('schedule', 'Не указан')
+            
+            cells = conditions_table.rows[3].cells
+            cells[0].text = 'Предполагаемая дата выхода'
+            cells[0].paragraphs[0].runs[0].font.bold = True
+            cells[1].text = self.start_date.date().toString("dd.MM.yyyy")
+            
+            doc.add_paragraph()
+            
+            # Компенсация
+            doc.add_heading('Компенсационный пакет:', level=1)
+            
+            salary_text = f'• Ежемесячная заработная плата: {self.salary_offer.text()} до вычета НДФЛ'
+            doc.add_paragraph(salary_text, style='List Bullet')
+            
+            probation_text = f'• Испытательный срок: {self.probation_period.value()} месяца'
+            doc.add_paragraph(probation_text, style='List Bullet')
+            
+            # Дополнительные условия
+            conditions = self.conditions_text.toPlainText().strip()
+            if conditions:
+                doc.add_paragraph()
+                doc.add_heading('Дополнительные льготы и преимущества:', level=1)
+                for line in conditions.split('\n'):
+                    if line.strip():
+                        doc.add_paragraph(f'• {line.strip()}', style='List Bullet')
+            
+            # Стандартные условия S7
+            doc.add_paragraph()
+            doc.add_heading('Стандартные условия для сотрудников S7:', level=1)
+            doc.add_paragraph('• ДМС после испытательного срока (диагностика, лечение, стоматология со скидкой до 75%)', style='List Bullet')
+            doc.add_paragraph('• Корпоративные тарифы на авиабилеты для Вас и членов семьи', style='List Bullet')
+            doc.add_paragraph('• Программа корпоративных скидок PrimeZone (скидки до 80% у 1500+ партнеров)', style='List Bullet')
+            doc.add_paragraph('• Программа психологической, финансовой и юридической поддержки "Понимаю"', style='List Bullet')
+            doc.add_paragraph('• Программа здорового образа жизни S7 Impulse (бесплатные тренировки)', style='List Bullet')
+            
+            # Комментарий
+            comment = self.comment_text.toPlainText().strip()
+            if comment:
+                doc.add_paragraph()
+                doc.add_heading('Дополнительно:', level=1)
+                doc.add_paragraph(comment)
+            
+            doc.add_paragraph()
+            doc.add_paragraph()
+            
+            # Подпись
+            doc.add_paragraph('С уважением,')
+            doc.add_paragraph('Команда S7 Recruitment')
+            doc.add_paragraph()
+            doc.add_paragraph('______________________          ______________________')
+            doc.add_paragraph('      (подпись)                              (дата)')
             
             # Сохранение документа
             doc.save(filename)
             
-            # Отображение информации в окне
-            info_text = f"""
-            ✅ Документ успешно создан!
+            QMessageBox.information(
+                self, 
+                "Успех", 
+                f"Оффер успешно создан и сохранен:\n{filename}\n\n"
+                "Не забудьте отправить его кандидату и обсудить детали."
+            )
             
-            Вакансия: {vacancy.get('title', '')}
-            Кандидат: {self.candidate_name.text().strip()}
-            
-            Файл сохранен: {filename}
-            """
-            
-            self.vacancy_info.setText(info_text)
-            
-            QMessageBox.information(self, "Успех", f"Документ успешно создан и сохранен:\n{filename}")
+            self.close()
             
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось создать документ: {str(e)}")
-    
-    def clear_form(self):
-        """Очистка формы"""
-        self.search_input.clear()
-        self.vacancy_combo.setCurrentIndex(0)
-        self.candidate_name.clear()
-        self.candidate_email.clear()
-        self.candidate_phone.clear()
-        self.vacancy_info.clear()
+            QMessageBox.critical(self, "Ошибка", f"Не удалось создать оффер: {str(e)}")

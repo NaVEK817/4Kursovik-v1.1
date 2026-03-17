@@ -115,9 +115,9 @@ class MainWindow(QMainWindow):
         nav_layout = QHBoxLayout()
 
         # Кнопки навигации
-        self.docs_btn = QPushButton("📄 Оформление документа")
-        self.docs_btn.clicked.connect(self.open_document_window)
-        nav_layout.addWidget(self.docs_btn)
+        #self.docs_btn = QPushButton("📄 Оформление документа")
+        #self.docs_btn.clicked.connect(self.open_document_window)
+        #nav_layout.addWidget(self.docs_btn)
 
         self.schedule_btn = QPushButton("📅 Расписание собеседований")
         self.schedule_btn.clicked.connect(self.open_schedule_window)
