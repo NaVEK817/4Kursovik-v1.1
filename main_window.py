@@ -7,10 +7,14 @@ from datetime import datetime
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QTableWidget, QTableWidgetItem, QHeaderView,
                              QPushButton, QLabel, QMessageBox, QMenu,
-                             QDialog, QTextEdit, QVBoxLayout as QVBoxDialog)
+                             QDialog, QTextEdit, QVBoxLayout as QVBoxDialog,
+                             QInputDialog)
 from PyQt5.QtCore import Qt, pyqtSignal, QPoint
-from PyQt5.QtGui import QCursor
+from PyQt5.QtGui import QCursor, QColor
 import styles
+
+# Импорты для кэша анализа
+from ai_agent_window import analysis_cache
 
 # Импорты для новых окон
 from ai_schedule_manager import AIScheduleManager
@@ -93,6 +97,7 @@ class MainWindow(QMainWindow):
         self.user_data = user_data
         self.vacancies = []
         self.schedule_manager = AIScheduleManager()
+        self.analyzed_vacancies = set()  # Множество ID вакансий, по которым проводился анализ
         self.init_ui()
         self.load_vacancies()
 
@@ -115,10 +120,6 @@ class MainWindow(QMainWindow):
         nav_layout = QHBoxLayout()
 
         # Кнопки навигации
-        #self.docs_btn = QPushButton("📄 Оформление документа")
-        #self.docs_btn.clicked.connect(self.open_document_window)
-        #nav_layout.addWidget(self.docs_btn)
-
         self.schedule_btn = QPushButton("📅 Расписание собеседований")
         self.schedule_btn.clicked.connect(self.open_schedule_window)
         nav_layout.addWidget(self.schedule_btn)
@@ -173,7 +174,7 @@ class MainWindow(QMainWindow):
 
         # Установка колонок
         columns = ["ID", "Название", "Зарплата", "Город", "Опыт", "График",
-                   "Занятость", "Дата публикации", "Навыки"]
+                   "Занятость", "Дата публикации", "Навыки", "Анализ"]
         self.table.setColumnCount(len(columns))
         self.table.setHorizontalHeaderLabels(columns)
 
@@ -188,6 +189,7 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # Занятость
         header.setSectionResizeMode(7, QHeaderView.ResizeToContents)  # Дата
         header.setSectionResizeMode(8, QHeaderView.Stretch)  # Навыки
+        header.setSectionResizeMode(9, QHeaderView.ResizeToContents)  # Анализ
 
         main_layout.addWidget(self.table)
 
@@ -207,15 +209,6 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(bottom_layout)
 
     # === МЕТОДЫ ДЛЯ ОТКРЫТИЯ ОКОН ===
-
-    def open_document_window(self):
-        """Открытие окна оформления документа"""
-        try:
-            from document_window import DocumentWindow
-            self.document_window = DocumentWindow(self.vacancies)
-            self.document_window.show()
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось открыть окно документа: {str(e)}")
 
     def open_schedule_window(self):
         """Открытие окна расписания собеседований"""
@@ -297,12 +290,15 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось открыть окно пользователей: {str(e)}")
 
-    # === ОСТАЛЬНЫЕ МЕТОДЫ ===
+    # === МЕТОДЫ ДЛЯ РАБОТЫ С ВАКАНСИЯМИ ===
 
     def show_context_menu(self, pos):
         """Показать контекстное меню при правом клике"""
         row = self.table.currentRow()
         if row >= 0:
+            vacancy = self.vacancies[row]
+            vacancy_id = vacancy.get('id', '')
+            
             menu = QMenu()
 
             view_action = menu.addAction("👁️ Просмотреть детали")
@@ -310,11 +306,20 @@ class MainWindow(QMainWindow):
 
             menu.addSeparator()
 
-            doc_action = menu.addAction("📄 Создать документ для этой вакансии")
-            doc_action.triggered.connect(self.create_document_for_vacancy)
-
             ai_action = menu.addAction("🤖 Анализ кандидатов для этой вакансии")
             ai_action.triggered.connect(self.analyze_candidates_for_vacancy)
+
+            # Если анализ уже проводился, добавляем пункты создания оффера
+            if vacancy_id in self.analyzed_vacancies or vacancy_id in analysis_cache:
+                menu.addSeparator()
+                
+                # Для лучшего кандидата
+                best_offer_action = menu.addAction("🏆 Создать оффер для лучшего кандидата")
+                best_offer_action.triggered.connect(lambda: self.create_offer_for_best_candidate(vacancy))
+                
+                # Для кандидата по выбору
+                select_offer_action = menu.addAction("📋 Выбрать кандидата из топа")
+                select_offer_action.triggered.connect(lambda: self.create_offer_for_selected_candidate(vacancy))
 
             menu.exec_(QCursor.pos())
 
@@ -326,27 +331,107 @@ class MainWindow(QMainWindow):
             dialog = VacancyDetailDialog(vacancy, self)
             dialog.exec_()
 
-    def create_document_for_vacancy(self):
-        """Создать документ для выбранной вакансии"""
-        row = self.table.currentRow()
-        if row >= 0:
-            try:
-                from document_window import DocumentWindow
-                self.document_window = DocumentWindow([self.vacancies[row]])
-                self.document_window.show()
-            except Exception as e:
-                QMessageBox.critical(self, "Ошибка", f"Не удалось создать документ: {str(e)}")
-
     def analyze_candidates_for_vacancy(self):
         """Открыть окно анализа кандидатов для выбранной вакансии"""
         row = self.table.currentRow()
         if row >= 0:
             try:
                 from ai_agent_window import AIAgentWindow
-                self.ai_window = AIAgentWindow(self.vacancies[row])
+                vacancy = self.vacancies[row]
+                self.ai_window = AIAgentWindow(vacancy)
+                
+                # Подключаем сигнал закрытия для обновления статуса анализа
+                self.ai_window.destroyed.connect(lambda: self.mark_vacancy_analyzed(vacancy.get('id')))
+                
                 self.ai_window.show()
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", f"Не удалось открыть анализ: {str(e)}")
+
+    def mark_vacancy_analyzed(self, vacancy_id):
+        """Отмечает вакансию как проанализированную"""
+        if vacancy_id:
+            self.analyzed_vacancies.add(vacancy_id)
+            self.update_table()  # Обновляем таблицу для изменения цвета
+
+    def create_offer_for_best_candidate(self, vacancy):
+        """Создает оффер для лучшего кандидата"""
+        vacancy_id = vacancy.get('id')
+        
+        if vacancy_id not in analysis_cache:
+            QMessageBox.warning(self, "Ошибка", "Данные анализа не найдены в кэше")
+            return
+        
+        results = analysis_cache[vacancy_id]
+        if not results:
+            QMessageBox.warning(self, "Ошибка", "Нет результатов анализа")
+            return
+        
+        # Берем лучшего кандидата
+        best_candidate = results[0]['candidate']
+        
+        reply = QMessageBox.question(
+            self,
+            "Создание оффера",
+            f"Вы хотите создать оффер для лучшего кандидата?\n\n"
+            f"🏆 {best_candidate.get('last_name', '')} {best_candidate.get('first_name', '')}\n"
+            f"📊 Рейтинг: {results[0]['score']}%\n\n"
+            f"Продолжить?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            self.open_offer_window(vacancy, best_candidate)
+
+    def create_offer_for_selected_candidate(self, vacancy):
+        """Создает оффер для выбранного кандидата из топа"""
+        vacancy_id = vacancy.get('id')
+        
+        if vacancy_id not in analysis_cache:
+            QMessageBox.warning(self, "Ошибка", "Данные анализа не найдены в кэше")
+            return
+        
+        results = analysis_cache[vacancy_id]
+        if not results:
+            QMessageBox.warning(self, "Ошибка", "Нет результатов анализа")
+            return
+        
+        # Формируем список кандидатов для выбора
+        candidates_list = []
+        for i, r in enumerate(results[:10], 1):
+            candidate = r['candidate']
+            name = f"{candidate.get('last_name', '')} {candidate.get('first_name', '')}".strip()
+            if not name:
+                name = candidate.get('name', 'Неизвестно')
+            candidates_list.append(f"{i}. {name} (рейтинг: {r['score']}%)")
+        
+        # Запрашиваем номер кандидата
+        number, ok = QInputDialog.getItem(
+            self,
+            "Выбор кандидата",
+            "Выберите кандидата из топа:",
+            candidates_list,
+            0,
+            False
+        )
+        
+        if ok and number:
+            # Извлекаем индекс
+            try:
+                index = int(number.split('.')[0]) - 1
+                if 0 <= index < len(results):
+                    selected_candidate = results[index]['candidate']
+                    self.open_offer_window(vacancy, selected_candidate)
+            except:
+                QMessageBox.warning(self, "Ошибка", "Не удалось определить кандидата")
+
+    def open_offer_window(self, vacancy, candidate):
+        """Открывает окно создания оффера"""
+        try:
+            from document_window import DocumentWindow
+            self.offer_window = DocumentWindow(vacancy, candidate)
+            self.offer_window.show()
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось открыть окно оффера: {str(e)}")
 
     def load_vacancies(self):
         """Загрузка вакансий из JSON файла"""
@@ -366,12 +451,14 @@ class MainWindow(QMainWindow):
             self.count_label.setText("Ошибка загрузки данных")
 
     def update_table(self):
-        """Обновление таблицы данными"""
+        """Обновление таблицы данными с цветовой индикацией"""
         self.table.setRowCount(len(self.vacancies))
 
         for row, vacancy in enumerate(self.vacancies):
+            vacancy_id = str(vacancy.get('id', ''))
+            
             # ID
-            self.table.setItem(row, 0, QTableWidgetItem(str(vacancy.get('id', ''))))
+            self.table.setItem(row, 0, QTableWidgetItem(vacancy_id))
 
             # Название
             title_item = QTableWidgetItem(vacancy.get('title', ''))
@@ -408,3 +495,20 @@ class MainWindow(QMainWindow):
             skills_item = QTableWidgetItem(skills)
             skills_item.setToolTip(skills)
             self.table.setItem(row, 8, skills_item)
+            
+            # Статус анализа
+            if vacancy_id in self.analyzed_vacancies or vacancy_id in analysis_cache:
+                status_item = QTableWidgetItem("✅ Анализ проведен")
+                status_item.setForeground(QColor(styles.S7_GREEN))
+                status_item.setTextAlignment(Qt.AlignCenter)
+                # Подсвечиваем всю строку бледно-зеленым
+                for col in range(self.table.columnCount()):
+                    item = self.table.item(row, col)
+                    if item:
+                        item.setBackground(QColor(240, 255, 240))  # Бледно-зеленый
+            else:
+                status_item = QTableWidgetItem("⏳ Не анализировалась")
+                status_item.setForeground(QColor(styles.S7_GRAY))
+                status_item.setTextAlignment(Qt.AlignCenter)
+            
+            self.table.setItem(row, 9, status_item)

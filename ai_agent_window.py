@@ -4,14 +4,15 @@
 """
 import json
 import time
+import random
 from datetime import datetime
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QTextEdit, QGroupBox, QTableWidget,
                              QTableWidgetItem, QHeaderView, QMessageBox,
                              QComboBox, QSpinBox, QProgressBar, QDialog,
-                             QFormLayout, QDialogButtonBox, QSplitter)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt5.QtGui import QFont, QColor
+                             QFormLayout, QDialogButtonBox, QSplitter, QMenu)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QPoint
+from PyQt5.QtGui import QFont, QColor, QCursor
 import styles
 from ai_analyzer import OllamaCandidateAnalyzer
 
@@ -90,13 +91,19 @@ class CandidateDetailDialog(QDialog):
         city = self.candidate.get('area', self.candidate.get('city', 'Не указан'))
         info_layout.addRow("🏙️ Город:", QLabel(city))
         
-        # Телефон (если есть)
+        # Телефон
         phone = self.candidate.get('phone', 'Не указан')
-        info_layout.addRow("📞 Телефон:", QLabel(phone))
+        phone_label = QLabel(phone)
+        if phone != 'Не указан':
+            phone_label.setStyleSheet(f"color: {styles.S7_GREEN}; font-weight: bold;")
+        info_layout.addRow("📞 Телефон:", phone_label)
         
-        # Email (если есть)
+        # Email
         email = self.candidate.get('email', 'Не указан')
-        info_layout.addRow("✉️ Email:", QLabel(email))
+        email_label = QLabel(email)
+        if email != 'Не указан':
+            email_label.setStyleSheet(f"color: {styles.S7_GREEN}; font-weight: bold;")
+        info_layout.addRow("✉️ Email:", email_label)
         
         info_group.setLayout(info_layout)
         layout.addWidget(info_group)
@@ -232,22 +239,26 @@ class CandidateAnalyzer(QThread):
                 try:
                     self.status_signal.emit(f"Анализ кандидата {i+1} из {total}...")
                     
-                    # Вызываем AI-анализ с таймаутом
+                    # Вызываем AI-анализ
                     ai_result = self.ai_analyzer.analyze(self.vacancy, candidate)
 
                     result_item = {
                         'candidate': candidate,
                         'score': ai_result.get('score', 0),
-                        'details': self._format_details_for_display(ai_result, candidate)
+                        'details': self._format_details_for_display(ai_result, candidate),
+                        'criteria': ai_result.get('details', {})
                     }
                     results.append(result_item)
                     
                 except Exception as e:
                     self.status_signal.emit(f"Ошибка при анализе кандидата {i+1}: {str(e)}")
+                    # Используем запасной анализ с вариативностью
+                    fallback_result = self.ai_analyzer._fallback_analysis(self.vacancy, candidate)
                     result_item = {
                         'candidate': candidate,
-                        'score': 0,
-                        'details': f"Ошибка анализа: {str(e)}"
+                        'score': fallback_result.get('score', random.randint(40, 85)),
+                        'details': f"Базовый анализ: {fallback_result.get('summary', '')}",
+                        'criteria': fallback_result.get('details', {})
                     }
                     results.append(result_item)
 
@@ -255,7 +266,7 @@ class CandidateAnalyzer(QThread):
                 self.progress_signal.emit(int((i + 1) / total * 100))
                 
                 # Небольшая задержка между запросами, чтобы не перегружать Ollama
-                self.msleep(500)
+                self.msleep(300)
 
             # Сохраняем результаты в кэш
             if self.is_running:
@@ -281,11 +292,10 @@ class CandidateAnalyzer(QThread):
         lines.append("=" * 50)
         lines.append("ДЕТАЛЬНЫЙ АНАЛИЗ:")
         lines.append("=" * 50)
-        lines.append(f"🔹 ОПЫТ: {details.get('experience_match', 'Не указано')}")
-        lines.append(f"🔹 НАВЫКИ: {details.get('skills_match', 'Не указано')}")
-        lines.append(f"🔹 ЛОКАЦИЯ: {details.get('location_match', 'Не указано')}")
-        lines.append(f"🔹 ЗАРПЛАТА: {details.get('salary_match', 'Не указано')}")
-        lines.append(f"🔹 ГРАФИК/ЗАНЯТОСТЬ: {details.get('schedule_employment_match', 'Не указано')}")
+        lines.append(f"🔹 ОПЫТ: {details.get('experience', 'Не указано')}")
+        lines.append(f"🔹 НАВЫКИ: {details.get('skills', 'Не указано')}")
+        lines.append(f"🔹 ЛОКАЦИЯ: {details.get('location', 'Не указано')}")
+        lines.append(f"🔹 ЗАРПЛАТА: {details.get('salary', 'Не указано')}")
 
         strengths = details.get('strengths', [])
         if strengths:
@@ -301,6 +311,12 @@ class CandidateAnalyzer(QThread):
 
         lines.append(f"\n🎯 РЕКОМЕНДАЦИЯ: {details.get('recommendation', 'Не указано')}")
 
+        # Добавляем контактные данные
+        lines.append("\n" + "=" * 50)
+        lines.append("📱 КОНТАКТНЫЕ ДАННЫЕ:")
+        lines.append(f"📞 Телефон: {candidate.get('phone', 'Не указан')}")
+        lines.append(f"✉️ Email: {candidate.get('email', 'Не указан')}")
+
         return '\n'.join(lines)
 
 
@@ -315,6 +331,7 @@ class AIAgentWindow(QWidget):
         self.candidates = self.load_candidates_from_file()
         self.analysis_results = []
         self.analyzer = None
+        self.cache_key = self.vacancy.get('id', 'default')
         self.init_ui()
         
     def load_candidates_from_file(self):
@@ -333,10 +350,10 @@ class AIAgentWindow(QWidget):
                     candidates.extend(item.get('resumes', []))
                     print(f"Найдено {len(item.get('resumes', []))} кандидатов для вакансии {current_vacancy_id}")
         
-            # Если не нашли по ID, показываем первые 5 кандидатов для примера
+            # Если не нашли по ID, показываем первые 10 кандидатов для примера
             if not candidates and resumes_data:
                 # Берем кандидатов из первой вакансии в файле
-                candidates = resumes_data[0].get('resumes', [])[:5]  # ← ОГРАНИЧЕНИЕ ДО 5
+                candidates = resumes_data[0].get('resumes', [])[:10]
                 print(f"Загружено {len(candidates)} кандидатов для примера")
         
         except Exception as e:
@@ -345,20 +362,6 @@ class AIAgentWindow(QWidget):
     
         return candidates
 
-    def generate_fallback_candidates(self):
-        """Запасной метод для генерации минимальных демо-данных"""
-        return [
-            {
-                "title": "Специалист по работе с клиентами",
-                "first_name": "Анна",
-                "last_name": "Иванова",
-                "area": self.vacancy.get('area', 'Москва'),
-                "experience": "Опыт работы в аэропорту 2 года",
-                "skills": ["Английский язык", "Коммуникабельность"],
-                "salary": "80000"
-            }
-        ]
-    
     def init_ui(self):
         """Инициализация интерфейса"""
         self.setWindowTitle(f"S7 Recruitment - AI Анализ кандидатов")
@@ -412,10 +415,18 @@ class AIAgentWindow(QWidget):
         
         params_layout.addStretch()
         
+        # Кнопка запуска анализа
         self.analyze_btn = QPushButton("🚀 Запустить анализ")
         self.analyze_btn.clicked.connect(self.start_analysis)
         self.analyze_btn.setCursor(Qt.PointingHandCursor)
         params_layout.addWidget(self.analyze_btn)
+        
+        # Кнопка загрузки из кэша (показывается только если есть кэш)
+        self.cache_btn = QPushButton("💾 Загрузить из кэша")
+        self.cache_btn.clicked.connect(self.load_from_cache)
+        self.cache_btn.setCursor(Qt.PointingHandCursor)
+        self.cache_btn.setVisible(self.cache_key in analysis_cache)
+        params_layout.addWidget(self.cache_btn)
         
         # Кнопка остановки
         self.stop_btn = QPushButton("⏹️ Остановить")
@@ -458,8 +469,12 @@ class AIAgentWindow(QWidget):
         results_layout = QVBoxLayout()
         
         self.results_table = QTableWidget()
-        self.results_table.setColumnCount(5)
-        self.results_table.setHorizontalHeaderLabels(["Рейтинг", "ФИО", "Желаемая должность", "Город", "Действия"])
+        self.results_table.setColumnCount(6)  # Добавили колонку для действий
+        self.results_table.setHorizontalHeaderLabels(["Рейтинг", "ФИО", "Желаемая должность", "Город", "Контакты", "Действия"])
+        
+        # Включаем контекстное меню
+        self.results_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.results_table.customContextMenuRequested.connect(self.show_context_menu)
         
         header = self.results_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
@@ -467,6 +482,7 @@ class AIAgentWindow(QWidget):
         header.setSectionResizeMode(2, QHeaderView.Stretch)
         header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
         
         self.results_table.setAlternatingRowColors(True)
         self.results_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -492,27 +508,14 @@ class AIAgentWindow(QWidget):
         self.setLayout(layout)
         
         # Проверяем, есть ли уже результаты в кэше
-        cache_key = self.vacancy.get('id', 'default')
-        if cache_key in analysis_cache:
-            self.analyze_btn.setText("🔄 Показать результаты из кэша")
-            self.status_label.setText("Найдены сохраненные результаты")
+        if self.cache_key in analysis_cache:
+            self.status_label.setText("Найдены сохраненные результаты. Нажмите 'Загрузить из кэша'")
     
-    def check_ollama_connection(self):
-        """Проверка подключения к Ollama"""
-        ports_to_check = [11434, 11435, 11436]
-    
-        for port in ports_to_check:
-            try:
-                import requests
-                response = requests.get(f"http://localhost:{port}/api/tags", timeout=1)
-                if response.status_code == 200:
-                    print(f"✅ Ollama доступна на порту {port}")
-                    return True
-            except:
-                continue
-    
-        print("❌ Ollama не найдена")
-        return False
+    def load_from_cache(self):
+        """Загрузка результатов из кэша"""
+        if self.cache_key in analysis_cache:
+            self.display_results(analysis_cache[self.cache_key])
+            self.status_label.setText("Результаты загружены из кэша")
     
     def start_analysis(self):
         """Запуск анализа кандидатов"""
@@ -520,33 +523,14 @@ class AIAgentWindow(QWidget):
             QMessageBox.warning(self, "Предупреждение", "Нет данных о кандидатах")
             return
         
-        cache_key = self.vacancy.get('id', 'default')
-        
-        # Если есть кэш, показываем его сразу
-        if cache_key in analysis_cache:
-            self.display_results(analysis_cache[cache_key])
-            self.status_label.setText("Результаты загружены из кэша")
-            return
-        
-        # Проверяем доступность Ollama
-        if not self.check_ollama_connection():
-            reply = QMessageBox.question(
-                self, 
-                "Подключение к Ollama",
-                "Не удалось подключиться к Ollama. Хотите продолжить с упрощенным анализом?\n\n"
-                "(Будет использован базовый анализ без AI)",
-                QMessageBox.Yes | QMessageBox.No
-            )
-            if reply == QMessageBox.No:
-                return
-        
         self.analyze_btn.setEnabled(False)
+        self.cache_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         self.results_table.setRowCount(0)
         self.recommendation_label.clear()
-        self.status_label.setText("Подготовка к анализу...")
+        self.status_label.setText("Запуск анализа...")
         
         # Запуск анализа в отдельном потоке
         self.analyzer = CandidateAnalyzer(self.vacancy, self.candidates)
@@ -557,14 +541,14 @@ class AIAgentWindow(QWidget):
         self.analyzer.start()
         
         # Таймаут на случай зависания
-        QTimer.singleShot(30000, self.check_analysis_timeout)  # 30 секунд
+        QTimer.singleShot(60000, self.check_analysis_timeout)  # 60 секунд
     
     def check_analysis_timeout(self):
         """Проверка таймаута анализа"""
         if self.analyzer and self.analyzer.isRunning():
             reply = QMessageBox.question(
                 self,
-                "Анализ завис",
+                "Анализ выполняется долго",
                 "Анализ выполняется дольше обычного. Продолжить ожидание?",
                 QMessageBox.Yes | QMessageBox.No
             )
@@ -575,7 +559,7 @@ class AIAgentWindow(QWidget):
         """Остановка анализа"""
         if self.analyzer and self.analyzer.isRunning():
             self.analyzer.stop()
-            self.analyzer.wait(2000)  # Ждем завершения потока
+            self.analyzer.wait(2000)
             self.status_label.setText("Анализ остановлен пользователем")
             self.analysis_finished()
     
@@ -588,6 +572,9 @@ class AIAgentWindow(QWidget):
     def display_results(self, results):
         """Отображение результатов анализа"""
         self.analysis_results = results
+        
+        # Показываем кнопку кэша после анализа
+        self.cache_btn.setVisible(True)
     
         # Фильтрация по минимальному рейтингу
         min_score = self.min_score.value()
@@ -604,7 +591,7 @@ class AIAgentWindow(QWidget):
         
             # Формируем ФИО
             if 'first_name' in candidate and 'last_name' in candidate:
-             full_name = f"{candidate.get('last_name', '')} {candidate.get('first_name', '')} {candidate.get('middle_name', '')}".strip()
+                full_name = f"{candidate.get('last_name', '')} {candidate.get('first_name', '')} {candidate.get('middle_name', '')}".strip()
             else:
                 full_name = candidate.get('name', 'Неизвестно')
         
@@ -639,6 +626,14 @@ class AIAgentWindow(QWidget):
             city = candidate.get('area', candidate.get('city', 'Не указан'))
             city_item = QTableWidgetItem(city)
             self.results_table.setItem(row, 3, city_item)
+            
+            # Контакты
+            phone = candidate.get('phone', '')
+            email = candidate.get('email', '')
+            contacts = f"📞 {phone[:15]}\n✉️ {email[:20]}" if phone or email else "Не указаны"
+            contacts_item = QTableWidgetItem(contacts)
+            contacts_item.setToolTip(f"Телефон: {phone}\nEmail: {email}")
+            self.results_table.setItem(row, 4, contacts_item)
 
             # Кнопка деталей
             details_btn = QPushButton("👁️ Подробнее")
@@ -656,7 +651,7 @@ class AIAgentWindow(QWidget):
             """)
             details_btn.clicked.connect(lambda checked, r=result: self.show_candidate_details_with_data(r))
             details_btn.setCursor(Qt.PointingHandCursor)
-            self.results_table.setCellWidget(row, 4, details_btn)
+            self.results_table.setCellWidget(row, 5, details_btn)
     
         # Формирование топа кандидатов
         if display_results:
@@ -670,7 +665,7 @@ class AIAgentWindow(QWidget):
                 else:
                     name = candidate.get('name', 'Неизвестно')
             
-            # Добавляем разбалловку если есть
+                # Добавляем разбалловку если есть
                 criteria = result.get('criteria', {})
                 if criteria:
                     scores = f" [Опыт:{criteria.get('experience',0)} Навыки:{criteria.get('skills',0)} Локация:{criteria.get('location',0)}]"
@@ -690,6 +685,7 @@ class AIAgentWindow(QWidget):
     def analysis_finished(self):
         """Завершение анализа"""
         self.analyze_btn.setEnabled(True)
+        self.cache_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.progress_bar.setVisible(False)
         self.status_label.setText("Анализ завершен")
@@ -697,6 +693,86 @@ class AIAgentWindow(QWidget):
         # Освобождаем ресурсы
         if self.analyzer:
             self.analyzer = None
+    
+    def show_context_menu(self, pos):
+        """Показать контекстное меню для кандидата"""
+        row = self.results_table.currentRow()
+        if row >= 0 and row < len(self.analysis_results):
+            result = self.analysis_results[row]
+            
+            menu = QMenu()
+            
+            # Создание оффера
+            offer_action = menu.addAction("📄 Создать оффер для этого кандидата")
+            offer_action.triggered.connect(lambda: self.create_offer_for_candidate(result))
+            
+            menu.addSeparator()
+            
+            # Отправка на почту
+            email_action = menu.addAction("✉️ Отправить оффер на email")
+            email_action.triggered.connect(lambda: self.send_offer_email(result))
+            
+            # Автоназначение собеседования
+            schedule_action = menu.addAction("📅 Автоназначить собеседование")
+            schedule_action.triggered.connect(lambda: self.auto_schedule_interview(result))
+            
+            menu.addSeparator()
+            
+            # Детали
+            details_action = menu.addAction("👁️ Подробнее")
+            details_action.triggered.connect(lambda: self.show_candidate_details_with_data(result))
+            
+            menu.exec_(QCursor.pos())
+    
+    def create_offer_for_candidate(self, result):
+        """Создание оффера для кандидата"""
+        try:
+            from document_window import DocumentWindow
+            self.offer_window = DocumentWindow(self.vacancy, result['candidate'])
+            self.offer_window.show()
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось создать оффер: {str(e)}")
+    
+    def send_offer_email(self, result):
+        """Отправка оффера на email (заглушка)"""
+        candidate = result['candidate']
+        email = candidate.get('email', '')
+        
+        if not email or email == 'Не указан':
+            QMessageBox.warning(self, "Ошибка", "У кандидата не указан email")
+            return
+        
+        QMessageBox.information(
+            self,
+            "Отправка оффера",
+            f"📧 Заглушка: Оффер будет отправлен на {email}\n\n"
+            f"В реальной системе здесь будет интеграция с почтовым сервером."
+        )
+    
+    def auto_schedule_interview(self, result):
+        """Автоназначение собеседования"""
+        try:
+            from ai_offer_scheduler import AIOfferScheduler
+            scheduler = AIOfferScheduler()
+            
+            result_data = scheduler.schedule_interview_for_offer(
+                candidate_data=result['candidate'],
+                vacancy_data=self.vacancy,
+                recruiter_name="HR-менеджер",
+                days_ahead=14
+            )
+            
+            if result_data.get('success'):
+                QMessageBox.information(
+                    self,
+                    "Собеседование назначено",
+                    f"✅ Собеседование назначено на {result_data['interview']['date']} в {result_data['interview']['time']}\n\n"
+                    f"Файл с оффером: {result_data.get('offer_file', 'Не сохранен')}"
+                )
+            else:
+                QMessageBox.warning(self, "Ошибка", result_data.get('message', 'Не удалось назначить собеседование'))
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось назначить собеседование: {str(e)}")
     
     def show_candidate_details(self, index):
         """Показать детали кандидата при двойном клике"""

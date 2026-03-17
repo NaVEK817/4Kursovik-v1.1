@@ -4,17 +4,127 @@
 """
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QCalendarWidget, QTableWidget, QTableWidgetItem,
                              QPushButton, QMessageBox, QGroupBox, QHeaderView,
                              QComboBox, QTimeEdit, QTextEdit, QLineEdit,
                              QDialog, QDialogButtonBox, QFormLayout, QSpinBox,
-                             QTabWidget, QSplitter, QFrame)
-from PyQt5.QtCore import Qt, QDate, QTime, pyqtSignal
-from PyQt5.QtGui import QColor  # ❗ ВАЖНО: добавить этот импорт
+                             QTabWidget, QSplitter, QFrame, QFileDialog, QDateEdit)
+from PyQt5.QtCore import Qt, QDate, QTime, pyqtSignal, QRect
+from PyQt5.QtGui import QColor, QPainter, QBrush, QPen, QTextCharFormat
 import styles
-from ai_schedule_manager import AIScheduleManager  # Обновленный импорт
+from ai_schedule_manager import AIScheduleManager
+
+class InterviewCalendarWidget(QCalendarWidget):
+    """Календарь с отображением количества собеседований"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.interview_counts = {}
+        self.setGridVisible(True)
+        self.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
+        
+    def set_interview_counts(self, counts):
+        """Устанавливает данные о количестве собеседований"""
+        self.interview_counts = counts
+        self.updateCells()
+        
+    def paintCell(self, painter, rect, date):
+        """Переопределяем отрисовку ячейки для отображения количества"""
+        super().paintCell(painter, rect, date)
+        
+        date_str = date.toString("yyyy-MM-dd")
+        count = self.interview_counts.get(date_str, 0)
+        
+        if count > 0:
+            # Сохраняем состояние painter
+            painter.save()
+            
+            # Устанавливаем цвет в зависимости от количества
+            if count >= 15:
+                painter.setBrush(QBrush(QColor(255, 200, 200)))  # Бледно-красный
+                painter.setPen(QPen(Qt.red))
+            else:
+                painter.setBrush(QBrush(QColor(200, 255, 200)))  # Светло-зеленый
+                painter.setPen(QPen(QColor(styles.S7_GREEN)))
+            
+            # Рисуем круг с количеством
+            text_rect = QRect(rect.right() - 25, rect.top() + 2, 20, 20)
+            painter.drawEllipse(text_rect)
+            
+            # Рисуем текст
+            painter.setPen(QPen(Qt.black))
+            painter.drawText(text_rect, Qt.AlignCenter, str(count))
+            
+            painter.restore()
+
+
+class AddInterviewDialog(QDialog):
+    """Диалог добавления собеседования"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.init_ui()
+        
+    def init_ui(self):
+        self.setWindowTitle("➕ Добавление собеседования")
+        self.setGeometry(300, 300, 400, 350)
+        self.setStyleSheet(styles.MAIN_STYLE)
+        
+        layout = QVBoxLayout()
+        layout.setSpacing(15)
+        
+        form_layout = QFormLayout()
+        
+        # Дата
+        self.date_edit = QDateEdit()
+        self.date_edit.setDate(QDate.currentDate().addDays(1))
+        self.date_edit.setCalendarPopup(True)
+        self.date_edit.setMinimumDate(QDate.currentDate())
+        form_layout.addRow("📅 Дата:", self.date_edit)
+        
+        # Время
+        self.time_edit = QTimeEdit()
+        self.time_edit.setTime(QTime(10, 0))
+        self.time_edit.setDisplayFormat("HH:mm")
+        form_layout.addRow("⏰ Время:", self.time_edit)
+        
+        # Кандидат
+        self.candidate_input = QLineEdit()
+        self.candidate_input.setPlaceholderText("Введите ФИО кандидата")
+        form_layout.addRow("👤 Кандидат:", self.candidate_input)
+        
+        # Интервьюер
+        self.interviewer_input = QLineEdit()
+        self.interviewer_input.setPlaceholderText("Кто проводит собеседование")
+        form_layout.addRow("👥 Интервьюер:", self.interviewer_input)
+        
+        # Комментарий
+        self.comment_input = QTextEdit()
+        self.comment_input.setMaximumHeight(80)
+        self.comment_input.setPlaceholderText("Дополнительная информация...")
+        form_layout.addRow("📝 Комментарий:", self.comment_input)
+        
+        layout.addLayout(form_layout)
+        
+        # Кнопки
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        
+        self.setLayout(layout)
+    
+    def get_data(self):
+        """Возвращает введенные данные"""
+        return {
+            'date': self.date_edit.date().toString("yyyy-MM-dd"),
+            'time': self.time_edit.time().toString("HH:mm"),
+            'candidate': self.candidate_input.text().strip(),
+            'interviewer': self.interviewer_input.text().strip(),
+            'comment': self.comment_input.toPlainText().strip()
+        }
 
 
 class ScheduleWindow(QWidget):
@@ -26,9 +136,10 @@ class ScheduleWindow(QWidget):
         super().__init__()
         self.user_data = user_data
         self.interviews = self.load_interviews()
-        self.ai_agent = AIScheduleManager()  # Используем новый менеджер
+        self.ai_agent = AIScheduleManager()
         self.init_ui()
         self.update_interviews_list()
+        self.update_calendar_counts()
 
     def init_ui(self):
         """Инициализация интерфейса"""
@@ -41,7 +152,7 @@ class ScheduleWindow(QWidget):
         main_layout.setSpacing(15)
         main_layout.setContentsMargins(20, 20, 20, 20)
 
-        # Левая панель (календарь и форма)
+        # Левая панель (календарь)
         left_panel = QWidget()
         left_layout = QVBoxLayout()
         left_layout.setSpacing(10)
@@ -52,9 +163,7 @@ class ScheduleWindow(QWidget):
         left_layout.addWidget(header_label)
 
         # Календарь
-        self.calendar = QCalendarWidget()
-        self.calendar.setGridVisible(True)
-        self.calendar.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
+        self.calendar = InterviewCalendarWidget()
         self.calendar.clicked.connect(self.date_selected)
         self.calendar.setMinimumHeight(250)
         left_layout.addWidget(self.calendar)
@@ -70,52 +179,12 @@ class ScheduleWindow(QWidget):
         date_group.setLayout(date_layout)
         left_layout.addWidget(date_group)
 
-        # Форма для добавления
-        add_group = QGroupBox("➕ Добавить собеседование")
-        add_layout = QVBoxLayout()
-
-        # Кандидат
-        cand_layout = QHBoxLayout()
-        cand_layout.addWidget(QLabel("Кандидат:"))
-        self.candidate_input = QLineEdit()
-        self.candidate_input.setPlaceholderText("Введите ФИО кандидата")
-        cand_layout.addWidget(self.candidate_input)
-        add_layout.addLayout(cand_layout)
-
-        # Интервьюер
-        interviewer_layout = QHBoxLayout()
-        interviewer_layout.addWidget(QLabel("Интервьюер:"))
-        self.interviewer_input = QLineEdit()
-        self.interviewer_input.setPlaceholderText("Кто проводит собеседование")
-        self.interviewer_input.setText(self.user_data.get('username', ''))
-        interviewer_layout.addWidget(self.interviewer_input)
-        add_layout.addLayout(interviewer_layout)
-
-        # Время
-        time_layout = QHBoxLayout()
-        time_layout.addWidget(QLabel("Время:"))
-        self.time_input = QTimeEdit()
-        self.time_input.setTime(QTime.currentTime())
-        self.time_input.setDisplayFormat("HH:mm")
-        time_layout.addWidget(self.time_input)
-        add_layout.addLayout(time_layout)
-
-        # Комментарий
-        comment_layout = QVBoxLayout()
-        comment_layout.addWidget(QLabel("Комментарий:"))
-        self.comment_input = QTextEdit()
-        self.comment_input.setMaximumHeight(60)
-        comment_layout.addWidget(self.comment_input)
-        add_layout.addLayout(comment_layout)
-
         # Кнопка добавления
         add_btn = QPushButton("➕ Добавить собеседование")
-        add_btn.clicked.connect(self.add_interview)
+        add_btn.clicked.connect(self.show_add_dialog)
         add_btn.setCursor(Qt.PointingHandCursor)
-        add_layout.addWidget(add_btn)
-
-        add_group.setLayout(add_layout)
-        left_layout.addWidget(add_group)
+        add_btn.setMinimumHeight(40)
+        left_layout.addWidget(add_btn)
 
         left_panel.setLayout(left_layout)
         left_panel.setMaximumWidth(350)
@@ -132,19 +201,19 @@ class ScheduleWindow(QWidget):
 
         # Таблица
         self.interviews_table = QTableWidget()
-        self.interviews_table.setColumnCount(7)  # +1 колонка для ID
+        self.interviews_table.setColumnCount(7)
         self.interviews_table.setHorizontalHeaderLabels(
             ["ID", "Время", "Кандидат", "Интервьюер", "Комментарий", "Статус", "Действия"]
         )
 
         header = self.interviews_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # ID
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Время
-        header.setSectionResizeMode(2, QHeaderView.Stretch)  # Кандидат
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Интервьюер
-        header.setSectionResizeMode(4, QHeaderView.Stretch)  # Комментарий
-        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Статус
-        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # Действия
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.Stretch)
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
 
         self.interviews_table.setAlternatingRowColors(True)
         center_layout.addWidget(self.interviews_table)
@@ -171,17 +240,33 @@ class ScheduleWindow(QWidget):
         self.ai_status.setStyleSheet(f"color: {styles.S7_GREEN};")
         ai_layout.addWidget(self.ai_status)
 
-        # Кнопка авто-назначения
-        self.auto_schedule_btn = QPushButton("🎯 Авто-назначение времени")
-        self.auto_schedule_btn.clicked.connect(self.auto_schedule)
-        self.auto_schedule_btn.setCursor(Qt.PointingHandCursor)
-        ai_layout.addWidget(self.auto_schedule_btn)
+        # Авто-назначение
+        auto_group = QGroupBox("Авто-назначение")
+        auto_layout = QVBoxLayout()
+        
+        self.auto_candidate = QLineEdit()
+        self.auto_candidate.setPlaceholderText("Введите имя кандидата")
+        auto_layout.addWidget(self.auto_candidate)
+        
+        auto_btn = QPushButton("🎯 Назначить время")
+        auto_btn.clicked.connect(self.auto_schedule)
+        auto_btn.setCursor(Qt.PointingHandCursor)
+        auto_layout.addWidget(auto_btn)
+        
+        auto_group.setLayout(auto_layout)
+        ai_layout.addWidget(auto_group)
 
         # Кнопка анализа конфликтов
-        self.analyze_conflicts_btn = QPushButton("🔍 Найти конфликты")
+        self.analyze_conflicts_btn = QPushButton("🔍 Проверить конфликты")
         self.analyze_conflicts_btn.clicked.connect(self.analyze_conflicts)
         self.analyze_conflicts_btn.setCursor(Qt.PointingHandCursor)
         ai_layout.addWidget(self.analyze_conflicts_btn)
+
+        # Кнопка прикрепления файла
+        self.attach_btn = QPushButton("📎 Прикрепить файл письма")
+        self.attach_btn.clicked.connect(self.attach_email_file)
+        self.attach_btn.setCursor(Qt.PointingHandCursor)
+        ai_layout.addWidget(self.attach_btn)
 
         ai_group.setLayout(ai_layout)
         right_layout.addWidget(ai_group)
@@ -203,9 +288,10 @@ class ScheduleWindow(QWidget):
 
         tips = [
             "• Лучшее время: 10:00-12:00",
-            "• Оставляйте 30 мин между собес.",
+            "• Оставляйте 30 мин между собеседованиями",
             "• Учитывайте часовые пояса",
-            "• Подтверждайте за день"
+            "• Подтверждайте за день",
+            "• При превышении 15 собеседований день помечается красным"
         ]
 
         for tip in tips:
@@ -246,11 +332,89 @@ class ScheduleWindow(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить расписание: {str(e)}")
 
+    def update_calendar_counts(self):
+        """Обновляет счетчики на календаре"""
+        counts = {}
+        for date_str, interviews in self.interviews.items():
+            counts[date_str] = len(interviews)
+        self.calendar.set_interview_counts(counts)
+
     def date_selected(self, date):
         """Обработка выбора даты"""
         date_str = date.toString("yyyy-MM-dd")
         self.selected_date_label.setText(f"Выбрана: {date.toString('dd.MM.yyyy')}")
         self.update_interviews_for_date(date_str)
+
+    def show_add_dialog(self):
+        """Показывает диалог добавления собеседования"""
+        dialog = AddInterviewDialog(self)
+        if dialog.exec_() == QDialog.Accepted:
+            data = dialog.get_data()
+            self.add_interview(data)
+
+    def add_interview(self, data):
+        """Добавление нового собеседования"""
+        date_str = data['date']
+        time_str = data['time']
+        candidate = data['candidate']
+        interviewer = data['interviewer']
+        comment = data['comment']
+
+        if not candidate:
+            QMessageBox.warning(self, "Предупреждение", "Введите имя кандидата")
+            return
+
+        if not interviewer:
+            interviewer = self.user_data.get('username', 'Не назначен')
+
+        # Проверка на прошедшее время
+        current_datetime = datetime.now()
+        interview_datetime = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+        
+        if interview_datetime < current_datetime:
+            QMessageBox.warning(self, "Ошибка", "Нельзя назначать собеседование на прошедшее время")
+            return
+
+        # Проверка на конфликт
+        existing = self.interviews.get(date_str, [])
+        if any(i.get('time') == time_str for i in existing):
+            QMessageBox.warning(self, "Конфликт", f"Время {time_str} уже занято!")
+            return
+
+        # Создаем ID для собеседования
+        interview_id = f"int_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+
+        new_interview = {
+            'id': interview_id,
+            'candidate': candidate,
+            'time': time_str,
+            'date': date_str,
+            'comment': comment,
+            'interviewer': interviewer,
+            'created_by': self.user_data.get('username'),
+            'created_at': datetime.now().isoformat(),
+            'status': 'scheduled'
+        }
+
+        if date_str not in self.interviews:
+            self.interviews[date_str] = []
+
+        self.interviews[date_str].append(new_interview)
+        self.save_interviews()
+
+        # Отправляем уведомление
+        self.ai_agent.send_interview_notification(new_interview)
+
+        # Обновление
+        self.update_interviews_for_date(date_str)
+        self.update_interviews_list()
+        self.update_calendar_counts()
+
+        QMessageBox.information(
+            self,
+            "Успех",
+            f"✅ Собеседование добавлено на {date_str} в {time_str}"
+        )
 
     def update_interviews_for_date(self, date_str):
         """Обновление списка собеседований для выбранной даты"""
@@ -267,16 +431,18 @@ class ScheduleWindow(QWidget):
             self.interviews_table.setItem(row, 0, id_item)
 
             # Время
-            self.interviews_table.setItem(row, 1, QTableWidgetItem(interview.get('time', '')))
+            time_item = QTableWidgetItem(interview.get('time', ''))
+            self.interviews_table.setItem(row, 1, time_item)
 
             # Кандидат
-            self.interviews_table.setItem(row, 2, QTableWidgetItem(interview.get('candidate', '')))
+            candidate_item = QTableWidgetItem(interview.get('candidate', ''))
+            self.interviews_table.setItem(row, 2, candidate_item)
 
             # Интервьюер
             interviewer = interview.get('interviewer', 'Не назначен')
             interviewer_item = QTableWidgetItem(interviewer)
             if interviewer == self.user_data.get('username'):
-                interviewer_item.setForeground(QColor(styles.S7_GREEN))  # ❗ Теперь QColor определен
+                interviewer_item.setForeground(QColor(styles.S7_GREEN))
             self.interviews_table.setItem(row, 3, interviewer_item)
 
             # Комментарий
@@ -342,7 +508,7 @@ class ScheduleWindow(QWidget):
             reschedule_btn.setToolTip("Запросить перенос")
             btn_layout.addWidget(reschedule_btn)
 
-            # Кнопка удаления (только для своих)
+            # Кнопка удаления
             if interview.get('interviewer') == self.user_data.get('username') or self.user_data.get('role') == 'admin':
                 delete_btn = QPushButton("✖")
                 delete_btn.setFixedSize(25, 25)
@@ -390,70 +556,9 @@ class ScheduleWindow(QWidget):
 """
         self.stats_label.setText(stats_text)
 
-    def add_interview(self):
-        """Добавление нового собеседования"""
-        date = self.calendar.selectedDate()
-        date_str = date.toString("yyyy-MM-dd")
-
-        candidate = self.candidate_input.text().strip()
-        if not candidate:
-            QMessageBox.warning(self, "Предупреждение", "Введите имя кандидата")
-            return
-
-        interviewer = self.interviewer_input.text().strip()
-        if not interviewer:
-            interviewer = self.user_data.get('username')
-
-        time_str = self.time_input.time().toString("HH:mm")
-        comment = self.comment_input.toPlainText().strip()
-
-        # Проверка на конфликт
-        existing = self.interviews.get(date_str, [])
-        if any(i.get('time') == time_str for i in existing):
-            QMessageBox.warning(self, "Конфликт", f"Время {time_str} уже занято!")
-            return
-
-        # Создаем ID для собеседования
-        interview_id = f"int_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
-
-        new_interview = {
-            'id': interview_id,
-            'candidate': candidate,
-            'time': time_str,
-            'date': date_str,
-            'comment': comment,
-            'interviewer': interviewer,
-            'created_by': self.user_data.get('username'),
-            'created_at': datetime.now().isoformat(),
-            'status': 'scheduled'
-        }
-
-        if date_str not in self.interviews:
-            self.interviews[date_str] = []
-
-        self.interviews[date_str].append(new_interview)
-        self.save_interviews()
-
-        # Отправляем уведомление
-        self.ai_agent.send_interview_notification(new_interview)
-
-        # Очистка формы
-        self.candidate_input.clear()
-        self.comment_input.clear()
-
-        # Обновление
-        self.update_interviews_for_date(date_str)
-        self.update_interviews_list()
-
-        QMessageBox.information(
-            self,
-            "Успех",
-            f"✅ Собеседование добавлено\n📧 Уведомление отправлено"
-        )
-
     def auto_schedule(self):
-        """Автоматическое назначение времени для оффера"""
-        candidate = self.candidate_input.text().strip()
+        """Автоматическое назначение времени для кандидата"""
+        candidate = self.auto_candidate.text().strip()
         if not candidate:
             QMessageBox.warning(self, "Ошибка", "Введите имя кандидата")
             return
@@ -461,7 +566,6 @@ class ScheduleWindow(QWidget):
         # Простые данные кандидата
         candidate_data = {
             "name": candidate,
-            "title": "Кандидат",
             "city": "Москва"
         }
 
@@ -507,15 +611,35 @@ class ScheduleWindow(QWidget):
                 self.interviews[result['date']].append(new_interview)
                 self.save_interviews()
                 self.ai_agent.send_interview_notification(new_interview)
+                self.update_calendar_counts()
 
                 QMessageBox.information(self, "Успех", "Собеседование добавлено!")
                 self.update_interviews_list()
+                
+            self.auto_candidate.clear()
         else:
             QMessageBox.warning(
                 self,
                 "Нет свободных слотов",
                 f"Не удалось найти время.\n"
                 f"Предложения: {', '.join(result.get('suggestions', []))}"
+            )
+
+    def attach_email_file(self):
+        """Прикрепление файла письма (заглушка)"""
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Выберите файл письма",
+            "",
+            "Email files (*.eml *.msg);;Text files (*.txt);;All files (*.*)"
+        )
+        
+        if filename:
+            QMessageBox.information(
+                self,
+                "Файл прикреплен",
+                f"📎 Файл {os.path.basename(filename)} будет использован как шаблон письма.\n\n"
+                f"(Заглушка: в реальной системе здесь будет парсинг файла и отправка)"
             )
 
     def request_reschedule(self, interview):
@@ -551,6 +675,7 @@ class ScheduleWindow(QWidget):
                 self.save_interviews()
                 self.update_interviews_for_date(date_str)
                 self.update_interviews_list()
+                self.update_calendar_counts()
 
     def show_interview_details(self, interview):
         """Показывает детали собеседования"""
@@ -576,32 +701,84 @@ class ScheduleWindow(QWidget):
         QMessageBox.information(self, "Детали собеседования", details)
 
     def analyze_conflicts(self):
-        """Анализирует конфликты в расписании"""
+        """Анализирует конфликты и ошибки в расписании"""
         conflicts = []
+        errors = []
+        current_datetime = datetime.now()
 
-        for date, interviews in self.interviews.items():
+        for date_str, interviews in self.interviews.items():
             times = {}
             for i in interviews:
+                # Проверка на дублирование времени
                 time = i.get('time')
                 if time in times:
                     conflicts.append({
-                        'date': date,
+                        'date': date_str,
                         'time': time,
                         'interviews': [times[time], i]
                     })
                 else:
                     times[time] = i
+                
+                # Проверка на прошедшее время
+                try:
+                    interview_datetime = datetime.strptime(f"{date_str} {time}", "%Y-%m-%d %H:%M")
+                    if interview_datetime < current_datetime:
+                        errors.append({
+                            'date': date_str,
+                            'time': time,
+                            'candidate': i.get('candidate'),
+                            'error': 'Собеседование назначено на прошедшее время'
+                        })
+                except:
+                    errors.append({
+                        'date': date_str,
+                        'time': time,
+                        'candidate': i.get('candidate'),
+                        'error': 'Некорректный формат даты/времени'
+                    })
+                
+                # Проверка наличия имени кандидата
+                if not i.get('candidate') or i.get('candidate').strip() == '':
+                    errors.append({
+                        'date': date_str,
+                        'time': time,
+                        'candidate': 'Не указан',
+                        'error': 'Не указано имя кандидата'
+                    })
+                
+                # Проверка наличия интервьюера
+                if not i.get('interviewer') or i.get('interviewer').strip() == '':
+                    errors.append({
+                        'date': date_str,
+                        'time': time,
+                        'candidate': i.get('candidate'),
+                        'error': 'Не назначен интервьюер'
+                    })
 
+        # Формируем отчет
+        report = ""
+        
         if conflicts:
-            text = "🔍 НАЙДЕНЫ КОНФЛИКТЫ:\n\n"
+            report += "🔴 НАЙДЕНЫ КОНФЛИКТЫ ВРЕМЕНИ:\n\n"
             for c in conflicts:
-                text += f"📅 {c['date']} в {c['time']}:\n"
+                report += f"📅 {c['date']} в {c['time']}:\n"
                 for i in c['interviews']:
-                    text += f"  • {i.get('candidate')} ({i.get('interviewer')})\n"
-                text += "\n"
-            QMessageBox.warning(self, "Конфликты", text)
+                    report += f"  • {i.get('candidate')} ({i.get('interviewer')})\n"
+                report += "\n"
+        
+        if errors:
+            if report:
+                report += "\n" + "="*50 + "\n\n"
+            report += "⚠️ ОШИБКИ В НАЗНАЧЕНИЯХ:\n\n"
+            for e in errors:
+                report += f"📅 {e['date']} {e['time']} - {e['candidate']}\n"
+                report += f"   ❌ {e['error']}\n\n"
+        
+        if not conflicts and not errors:
+            QMessageBox.information(self, "Анализ", "✅ Конфликтов и ошибок не найдено")
         else:
-            QMessageBox.information(self, "Анализ", "✅ Конфликтов не найдено")
+            QMessageBox.warning(self, "Результаты анализа", report)
 
 
 class RescheduleRequestDialog(QDialog):
@@ -670,7 +847,7 @@ class RescheduleRequestDialog(QDialog):
         result = self.ai_agent.request_reschedule(
             self.interview.get('id'),
             reason,
-            "Кандидат"  # или интервьюер
+            self.parent().user_data.get('username', 'Пользователь')
         )
 
         if result.get('success'):

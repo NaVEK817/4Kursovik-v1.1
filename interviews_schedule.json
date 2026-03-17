@@ -13,5 +13,55 @@
       "created_by": "AI Offer Scheduler",
       "created_at": "2026-03-16T09:59:26.250867"
     }
+  ],
+  "2026-03-18": [
+    {
+      "id": "int_20260317220202884609",
+      "candidate": "Кандидат",
+      "time": "09:00",
+      "date": "2026-03-18",
+      "vacancy": "Водитель-тракторист",
+      "vacancy_id": "129510216",
+      "recruiter": "HR-менеджер",
+      "status": "scheduled",
+      "comment": "Авто-назначение от ИИ. Ближайший доступный слот",
+      "created_by": "AI Offer Scheduler",
+      "created_at": "2026-03-17T22:02:02.884634"
+    },
+    {
+      "id": "int_20260317220750975001",
+      "candidate": "Иванов Иван Иванович",
+      "time": "10:00",
+      "date": "2026-03-18",
+      "comment": "Авто-назначение от ИИ. Стандартное рабочее время",
+      "interviewer": "1",
+      "created_by": "AI Agent",
+      "created_at": "2026-03-17T22:07:50.975100",
+      "status": "scheduled"
+    },
+    {
+      "id": "int_20260317221038972926",
+      "candidate": "Иванов Иван Иванович",
+      "time": "11:00",
+      "date": "2026-03-18",
+      "comment": "",
+      "interviewer": "1",
+      "created_by": "1",
+      "created_at": "2026-03-17T22:10:38.972978",
+      "status": "scheduled"
+    },
+    {
+      "id": "int_20260317221706111725",
+      "candidate": "Кандидат",
+      "time": "09:30",
+      "date": "2026-03-18",
+      "vacancy": "Старший специалист по логистике (сопровождение ремонта компонентов)",
+      "vacancy_id": "129069747",
+      "recruiter": "HR-менеджер",
+      "status": "scheduled",
+      "comment": "Авто-назначение от ИИ. Ближайший доступный слот",
+      "created_by": "AI Offer Scheduler",
+      "created_at": "2026-03-17T22:17:06.111746"
+    }
   ]
 }
