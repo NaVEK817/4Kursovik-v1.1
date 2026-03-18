@@ -2,15 +2,20 @@
 """
 Окно сообщений и уведомлений для пользователей
 """
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+import json
+import os
+from datetime import datetime, timedelta
+from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QListWidget, QListWidgetItem,
                              QGroupBox, QMessageBox, QTextEdit, QDialog,
                              QFormLayout, QComboBox, QDateEdit, QTimeEdit,
-                             QDialogButtonBox, QMenu)
-from PyQt5.QtCore import Qt, QDate, QTime, QPoint
-from PyQt5.QtGui import QColor, QCursor
+                             QDialogButtonBox, QMenu, QProgressBar)
+from PyQt5.QtCore import Qt, QDate, QTime, QPoint, QTimer
+from PyQt5.QtGui import QColor, QCursor, QFont
 import styles
-from datetime import datetime
+
+# Константа для файла с сообщениями
+MESSAGES_FILE = "interview_messages.json"
 
 
 class MessagesWindow(QWidget):
@@ -20,12 +25,13 @@ class MessagesWindow(QWidget):
         super().__init__()
         self.user_data = user_data
         self.manager = schedule_manager
+        self.messages_file = MESSAGES_FILE
         self.init_ui()
         self.load_messages()
 
     def init_ui(self):
         self.setWindowTitle("S7 Recruitment - Сообщения и уведомления")
-        self.setGeometry(200, 200, 900, 700)
+        self.setGeometry(200, 200, 1000, 750)
         self.setStyleSheet(styles.MAIN_STYLE)
 
         layout = QVBoxLayout()
@@ -84,6 +90,22 @@ class MessagesWindow(QWidget):
         self.respond_btn.setCursor(Qt.PointingHandCursor)
         buttons_layout.addWidget(self.respond_btn)
 
+        # НОВАЯ КНОПКА: Решить все сообщения
+        self.resolve_all_btn = QPushButton("✅ Решить все сообщения")
+        self.resolve_all_btn.clicked.connect(self.resolve_all_messages)
+        self.resolve_all_btn.setCursor(Qt.PointingHandCursor)
+        self.resolve_all_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {styles.S7_GREEN};
+                color: white;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {styles.S7_DARK_GREEN};
+            }}
+        """)
+        buttons_layout.addWidget(self.resolve_all_btn)
+
         self.delete_btn = QPushButton("🗑️ Удалить сообщение")
         self.delete_btn.clicked.connect(self.delete_selected)
         self.delete_btn.setCursor(Qt.PointingHandCursor)
@@ -102,25 +124,75 @@ class MessagesWindow(QWidget):
         buttons_layout.addStretch()
 
         layout.addLayout(buttons_layout)
+
+        # Прогресс бар для массовых операций
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        layout.addWidget(self.progress_bar)
+
         self.setLayout(layout)
+
+    def load_messages_from_file(self):
+        """Загружает все сообщения из файла interview_messages.json"""
+        if not os.path.exists(self.messages_file):
+            return []
+        
+        try:
+            with open(self.messages_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"Ошибка загрузки сообщений: {e}")
+            return []
+
+    def save_messages_to_file(self, messages):
+        """Сохраняет все сообщения в файл interview_messages.json"""
+        try:
+            with open(self.messages_file, 'w', encoding='utf-8') as f:
+                json.dump(messages, f, ensure_ascii=False, indent=2, default=str)
+            return True
+        except Exception as e:
+            print(f"Ошибка сохранения сообщений: {e}")
+            return False
+
+    def get_message_stats(self):
+        """Получает статистику сообщений из файла"""
+        messages = self.load_messages_from_file()
+        
+        total = len(messages)
+        unread = sum(1 for m in messages if not m.get('read', False))
+        pending = sum(1 for m in messages if m.get('status') == 'pending')
+        
+        return {
+            'total': total,
+            'unread': unread,
+            'pending': pending
+        }
 
     def load_messages(self):
         """Загружает сообщения пользователя"""
         self.messages_list.clear()
+        
+        # Загружаем все сообщения из файла
+        all_messages = self.load_messages_from_file()
+        
+        # Фильтруем сообщения для текущего пользователя
+        user_messages = []
+        for msg in all_messages:
+            if (msg.get('candidate') == self.user_data.get('username') or
+                msg.get('interviewer') == self.user_data.get('username') or
+                msg.get('requested_by') == self.user_data.get('username')):
+                user_messages.append(msg)
 
-        messages = self.manager.get_user_messages(self.user_data.get('username'))
-
-        # Обновляем статистику
-        stats = self.manager.get_schedule_statistics()
-        msg_stats = stats.get('message_stats', {})
+        # Получаем статистику из файла
+        stats = self.get_message_stats()
 
         self.stats_label.setText(
-            f"📨 Всего сообщений: {msg_stats.get('total', 0)} | "
-            f"🔴 Непрочитанных: {msg_stats.get('unread', 0)} | "
-            f"⏳ Ожидают ответа: {msg_stats.get('pending_requests', 0)}"
+            f"📨 Всего сообщений: {stats['total']} | "
+            f"🔴 Непрочитанных: {stats['unread']} | "
+            f"⏳ Ожидают ответа: {stats['pending']}"
         )
 
-        for msg in messages:
+        for msg in user_messages:
             self.add_message_to_list(msg)
 
     def add_message_to_list(self, message: dict):
@@ -296,8 +368,26 @@ class MessagesWindow(QWidget):
     def mark_message_read(self, item):
         """Отмечает конкретное сообщение как прочитанное"""
         message = item.data(Qt.UserRole)
-        self.manager.mark_message_read(message.get('id'))
-        self.load_messages()
+        message_id = message.get('id')
+        
+        # Загружаем все сообщения из файла
+        all_messages = self.load_messages_from_file()
+        
+        # Обновляем статус прочтения
+        updated = False
+        for msg in all_messages:
+            if msg.get('id') == message_id:
+                msg['read'] = True
+                msg['read_at'] = datetime.now().isoformat()
+                updated = True
+                break
+        
+        if updated:
+            # Сохраняем обновленный список
+            self.save_messages_to_file(all_messages)
+            
+            # Обновляем отображение
+            self.load_messages()
 
     def delete_selected(self):
         """Удаляет выбранное сообщение"""
@@ -309,8 +399,9 @@ class MessagesWindow(QWidget):
         self.delete_message(current)
 
     def delete_message(self, item):
-        """Удаляет конкретное сообщение"""
+        """Удаляет конкретное сообщение из файла"""
         message = item.data(Qt.UserRole)
+        message_id = message.get('id')
         
         reply = QMessageBox.question(
             self,
@@ -320,16 +411,99 @@ class MessagesWindow(QWidget):
         )
 
         if reply == QMessageBox.Yes:
-            # Загружаем все сообщения
-            messages = self.manager._load_messages()
-            # Удаляем нужное
-            messages = [m for m in messages if m.get('id') != message.get('id')]
-            # Сохраняем
-            self.manager._save_messages(messages)
-            # Обновляем список
-            self.load_messages()
+            # Загружаем все сообщения из файла
+            all_messages = self.load_messages_from_file()
             
-            QMessageBox.information(self, "Успех", "Сообщение удалено")
+            # Фильтруем, удаляя нужное сообщение
+            filtered_messages = [m for m in all_messages if m.get('id') != message_id]
+            
+            if len(filtered_messages) < len(all_messages):
+                # Сохраняем обновленный список
+                if self.save_messages_to_file(filtered_messages):
+                    # Обновляем отображение
+                    self.load_messages()
+                    QMessageBox.information(self, "Успех", "Сообщение удалено")
+                else:
+                    QMessageBox.critical(self, "Ошибка", "Не удалось сохранить изменения")
+            else:
+                QMessageBox.warning(self, "Ошибка", "Сообщение не найдено в файле")
+
+    def resolve_all_messages(self):
+        """Решает все сообщения: прочитывает и автоматически отвечает на запросы"""
+        reply = QMessageBox.question(
+            self,
+            "Решение всех сообщений",
+            "Это действие отметит все сообщения как прочитанные и автоматически ответит на все ожидающие запросы переноса, подтверждая их.\n\n"
+            "Продолжить?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply != QMessageBox.Yes:
+            return
+
+        # Загружаем все сообщения
+        all_messages = self.load_messages_from_file()
+        if not all_messages:
+            QMessageBox.information(self, "Информация", "Нет сообщений для обработки")
+            return
+
+        # Показываем прогресс бар
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setMaximum(len(all_messages))
+        self.progress_bar.setValue(0)
+
+        updated_count = 0
+        resolved_count = 0
+        current_time = datetime.now().isoformat()
+
+        for i, msg in enumerate(all_messages):
+            # Обновляем прогресс
+            self.progress_bar.setValue(i + 1)
+            QApplication.processEvents()
+
+            # Отмечаем как прочитанное
+            if not msg.get('read', False):
+                msg['read'] = True
+                msg['read_at'] = current_time
+                updated_count += 1
+
+            # Автоматически отвечаем на ожидающие запросы
+            if msg.get('type') == 'reschedule_request' and msg.get('status') == 'pending':
+                # Подтверждаем перенос с предложением альтернативы через 2 дня
+                interview = msg.get('interview_data', {})
+                if interview:
+                    new_date = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d")
+                    new_time = "11:00"
+                    
+                    # Вызываем метод подтверждения
+                    result = self.manager.confirm_reschedule(
+                        msg.get('id'),
+                        new_date,
+                        new_time
+                    )
+                    
+                    if result.get('success'):
+                        resolved_count += 1
+                        msg['status'] = 'confirmed'
+                        msg['resolved_at'] = current_time
+
+        # Сохраняем изменения
+        if updated_count > 0 or resolved_count > 0:
+            self.save_messages_to_file(all_messages)
+            
+            QMessageBox.information(
+                self,
+                "Операция завершена",
+                f"✅ Обработано сообщений: {len(all_messages)}\n"
+                f"📖 Отмечено как прочитанные: {updated_count}\n"
+                f"🔄 Подтверждено запросов на перенос: {resolved_count}"
+            )
+        else:
+            QMessageBox.information(self, "Информация", "Нет сообщений для обработки")
+
+        # Скрываем прогресс бар и обновляем список
+        self.progress_bar.setVisible(False)
+        self.load_messages()
 
     def respond_to_request(self):
         """Отвечает на запрос"""
@@ -395,27 +569,11 @@ class RescheduleConfirmDialog(QDialog):
         layout.addWidget(date_group)
 
         # Кнопки
-        buttons_layout = QHBoxLayout()
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.confirm_reschedule)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
 
-        self.confirm_btn = QPushButton("✅ Подтвердить перенос")
-        self.confirm_btn.clicked.connect(self.confirm_reschedule)
-        self.confirm_btn.setCursor(Qt.PointingHandCursor)
-        buttons_layout.addWidget(self.confirm_btn)
-
-        self.reject_btn = QPushButton("❌ Отклонить запрос")
-        self.reject_btn.clicked.connect(self.reject_request)
-        self.reject_btn.setCursor(Qt.PointingHandCursor)
-        self.reject_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {styles.S7_RED};
-                color: white;
-            }}
-        """)
-        buttons_layout.addWidget(self.reject_btn)
-
-        buttons_layout.addStretch()
-
-        layout.addLayout(buttons_layout)
         self.setLayout(layout)
 
     def confirm_reschedule(self):
@@ -434,16 +592,3 @@ class RescheduleConfirmDialog(QDialog):
             self.accept()
         else:
             QMessageBox.warning(self, "Ошибка", result.get('message'))
-
-    def reject_request(self):
-        """Отклоняет запрос"""
-        reply = QMessageBox.question(
-            self,
-            "Отклонение запроса",
-            "Вы уверены, что хотите отклонить запрос на перенос?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-
-        if reply == QMessageBox.Yes:
-            QMessageBox.information(self, "Информация", "Запрос отклонен")
-            self.reject()

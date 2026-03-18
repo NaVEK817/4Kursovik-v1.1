@@ -169,7 +169,7 @@ class OllamaCandidateAnalyzer:
         return None
     
     def _fallback_analysis(self, vacancy: Dict, candidate: Dict) -> Dict:
-        """Запасной метод анализа с вариативными оценками"""
+        """Запасной метод анализа с реальными слабостями кандидата"""
         
         # Получаем имя кандидата
         if 'first_name' in candidate and 'last_name' in candidate:
@@ -181,46 +181,131 @@ class OllamaCandidateAnalyzer:
         import random
         base_score = 60
         
-        # Опыт
-        exp = candidate.get('experience', '')
+        # Анализ опыта
+        exp = candidate.get('experience', [])
         exp_score = 0
-        if exp:
-            if isinstance(exp, list):
+        exp_weaknesses = []
+        
+        if isinstance(exp, list):
+            if len(exp) == 0:
+                exp_weaknesses.append("Нет опыта работы")
+            else:
                 exp_score = min(20, len(exp) * 5)
-            elif isinstance(exp, str) and len(exp) > 10:
+                # Проверяем релевантность опыта
+                vacancy_title = vacancy.get('title', '').lower()
+                for exp_item in exp:
+                    if isinstance(exp_item, dict):
+                        position = exp_item.get('position', '').lower()
+                        if vacancy_title and vacancy_title not in position and position not in vacancy_title:
+                            exp_weaknesses.append("Опыт не полностью соответствует вакансии")
+                            break
+        elif isinstance(exp, str):
+            if len(exp) < 10:
+                exp_weaknesses.append("Опыт описан недостаточно подробно")
+            else:
                 exp_score = 15
         
-        # Навыки
+        # Анализ навыков
         skills = candidate.get('skills', [])
         skills_score = 0
-        if skills:
-            if isinstance(skills, list):
+        skills_weaknesses = []
+        
+        if isinstance(skills, list):
+            if len(skills) == 0:
+                skills_weaknesses.append("Не указаны ключевые навыки")
+            else:
                 skills_score = min(20, len(skills) * 3)
-            elif isinstance(skills, str):
+                # Проверяем наличие ключевых навыков из вакансии
+                vacancy_skills = vacancy.get('skills', '')
+                if vacancy_skills and isinstance(vacancy_skills, str):
+                    required_skills = [s.strip().lower() for s in vacancy_skills.split(',')]
+                    candidate_skills = [s.lower() for s in skills if isinstance(s, str)]
+                    missing_skills = [s for s in required_skills if s not in candidate_skills]
+                    if missing_skills:
+                        skills_weaknesses.append(f"Отсутствуют навыки: {', '.join(missing_skills[:3])}")
+        elif isinstance(skills, str):
+            if not skills:
+                skills_weaknesses.append("Не указаны ключевые навыки")
+            else:
                 skills_score = 10
         
-        # Соответствие городу
-        location_score = 10 if candidate.get('area') == vacancy.get('area') else 5
+        # Анализ локации
+        location_score = 10
+        location_weaknesses = []
+        candidate_city = candidate.get('area', candidate.get('city', '')).lower()
+        vacancy_city = vacancy.get('area', '').lower()
         
-        # Добавляем случайность
+        if isinstance(vacancy_city, dict):
+            vacancy_city = vacancy_city.get('name', '').lower()
+        
+        if candidate_city and vacancy_city and candidate_city != vacancy_city:
+            if 'москва' in candidate_city and 'москва' in vacancy_city:
+                pass  # Оба в Москве
+            elif 'удален' not in candidate_city and 'удален' not in vacancy_city:
+                location_score = 5
+                location_weaknesses.append(f"Находится в {candidate_city}, требуется {vacancy_city}")
+        
+        # Анализ зарплаты
+        salary_weaknesses = []
+        candidate_salary = candidate.get('salary', '')
+        vacancy_salary = vacancy.get('salary', '')
+        
+        if candidate_salary and vacancy_salary:
+            try:
+                # Пытаемся извлечь числа из зарплатных ожиданий
+                import re
+                cand_numbers = re.findall(r'\d+', str(candidate_salary))
+                vac_numbers = re.findall(r'\d+', str(vacancy_salary))
+                
+                if cand_numbers and vac_numbers:
+                    cand_salary = int(cand_numbers[0])
+                    vac_salary = int(vac_numbers[0])
+                    if cand_salary > vac_salary * 1.3:
+                        salary_weaknesses.append("Зарплатные ожидания выше предложения")
+            except:
+                pass
+        
+        # Собираем все слабости
+        weaknesses = exp_weaknesses + skills_weaknesses + location_weaknesses + salary_weaknesses
+        if not weaknesses:
+            weaknesses = ["Соответствие базовым требованиям"]
+        
+        # Сильные стороны
+        strengths = []
+        if exp_score > 10:
+            strengths.append("Имеется релевантный опыт")
+        if skills_score > 10:
+            strengths.append("Хороший набор навыков")
+        if location_score == 10:
+            strengths.append("Соответствие локации")
+        if not strengths:
+            strengths = ["Может быть рассмотрен"]
+        
+        # Добавляем случайность для разнообразия оценок
         random_factor = random.randint(-5, 10)
-        
         total_score = min(100, max(30, base_score + exp_score + skills_score + location_score + random_factor))
+        
+        # Определяем рекомендацию
+        if total_score >= 70:
+            recommendation = "Да"
+        elif total_score >= 50:
+            recommendation = "Сомнительно"
+        else:
+            recommendation = "Нет"
         
         return {
             "score": total_score,
-            "summary": f"Кандидат {name} - базовый анализ (AI недоступен)",
+            "summary": f"Кандидат {name} - анализ на основе имеющихся данных",
             "details": {
-                "experience": f"Опыт: {exp_score} баллов",
-                "skills": f"Навыки: {skills_score} баллов",
-                "location": f"Локация: {location_score} баллов",
-                "salary": "Не оценивалось",
-                "strengths": ["Базовое соответствие"],
-                "weaknesses": ["Детальный анализ недоступен"],
-                "recommendation": "Рассмотреть" if total_score >= 60 else "Сомнительно"
+                "experience": f"Опыт: {exp_score} баллов. {'Опыт присутствует' if exp else 'Опыт не указан'}",
+                "skills": f"Навыки: {skills_score} баллов. Указано навыков: {len(skills) if isinstance(skills, list) else 'есть'}",
+                "location": f"Локация: {location_score} баллов. Город: {candidate.get('area', candidate.get('city', 'Не указан'))}",
+                "salary": "В пределах нормы" if not salary_weaknesses else "Требует обсуждения",
+                "strengths": strengths,
+                "weaknesses": weaknesses,
+                "recommendation": recommendation
             }
         }
-    
     def get_top_candidates(self, vacancy: Dict, candidates: List[Dict], top_n: int = 5) -> List[Dict]:
         """Возвращает топ кандидатов"""
         results = []

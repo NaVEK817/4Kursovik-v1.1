@@ -783,15 +783,46 @@ class AIAgentWindow(QWidget):
         )
     
     def auto_schedule_interview(self, result):
-        """Автоназначение собеседования"""
+        """Автоназначение собеседования с реальными данными"""
         try:
             from ai_offer_scheduler import AIOfferScheduler
             scheduler = AIOfferScheduler()
             
+            # ПОЛУЧАЕМ РЕАЛЬНОЕ ИМЯ КАНДИДАТА из данных
+            candidate = result['candidate']
+            
+            # Формируем полное имя кандидата
+            if 'first_name' in candidate and 'last_name' in candidate:
+                candidate_name = f"{candidate.get('last_name', '')} {candidate.get('first_name', '')} {candidate.get('middle_name', '')}".strip()
+            else:
+                candidate_name = candidate.get('name', 'Неизвестно')
+            
+            # Если имя все еще пустое или "Неизвестно", используем данные из резюме
+            if candidate_name == 'Неизвестно' or not candidate_name:
+                # Пробуем собрать из других полей
+                candidate_name = f"{candidate.get('last_name', '')} {candidate.get('first_name', '')}".strip()
+                if not candidate_name:
+                    candidate_name = candidate.get('title', 'Кандидат')
+            
+            print(f"Автоназначение для кандидата: {candidate_name}")  # Отладка
+            
+            # ПОЛУЧАЕМ ИМЯ ТЕКУЩЕГО ПОЛЬЗОВАТЕЛЯ из системы
+            import getpass
+            import os
+            
+            # Пытаемся получить реальное имя пользователя Windows
+            recruiter_name = os.environ.get('USERNAME', '')
+            if not recruiter_name:
+                recruiter_name = getpass.getuser()
+            if not recruiter_name:
+                recruiter_name = "HR-менеджер"
+                
+            print(f"Интервьюер: {recruiter_name}")  # Отладка
+            
             result_data = scheduler.schedule_interview_for_offer(
                 candidate_data=result['candidate'],
                 vacancy_data=self.vacancy,
-                recruiter_name="HR-менеджер",
+                recruiter_name=recruiter_name,  # Реальное имя пользователя
                 days_ahead=14
             )
             
@@ -799,14 +830,17 @@ class AIAgentWindow(QWidget):
                 QMessageBox.information(
                     self,
                     "Собеседование назначено",
-                    f"✅ Собеседование назначено на {result_data['interview']['date']} в {result_data['interview']['time']}\n\n"
-                    f"Файл с оффером: {result_data.get('offer_file', 'Не сохранен')}"
+                    f"✅ Собеседование для кандидата {candidate_name} назначено на {result_data['interview']['date']} в {result_data['interview']['time']}\n\n"
+                    f"👥 Интервьюер: {recruiter_name}\n"
+                    f"📄 Файл с оффером: {result_data.get('offer_file', 'Не сохранен')}"
                 )
             else:
                 QMessageBox.warning(self, "Ошибка", result_data.get('message', 'Не удалось назначить собеседование'))
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось назначить собеседование: {str(e)}")
-    
+            # ИСПРАВЛЕНИЕ: импортируем traceback внутри except
+            import traceback
+            traceback.print_exc()
     def show_candidate_details(self, index):
         """Показать детали кандидата при двойном клике"""
         row = index.row()

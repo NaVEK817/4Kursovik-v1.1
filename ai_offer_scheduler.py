@@ -98,27 +98,35 @@ class AIOfferScheduler:
     # ==================== ОСНОВНАЯ ЛОГИКА ПЛАНИРОВАНИЯ ====================
 
     def schedule_interview_for_offer(self,
-                                     candidate_data: Dict,
-                                     vacancy_data: Dict,
-                                     recruiter_name: str = "Агент-рекрутер",
-                                     days_ahead: int = 14) -> Dict[str, Any]:
+                                    candidate_data: Dict,
+                                    vacancy_data: Dict,
+                                    recruiter_name: str = "Агент-рекрутер",
+                                    days_ahead: int = 14) -> Dict[str, Any]:
         """
         Главный метод: назначает собеседование на основе данных кандидата и вакансии.
 
         Args:
             candidate_data: Данные кандидата (из resume_file.json или от другого агента).
             vacancy_data: Данные вакансии (из vacancy_test_file.json).
-            recruiter_name: Имя рекрутера (интервьюера).
+            recruiter_name: Имя рекрутера (интервьюера) - ОБЯЗАТЕЛЬНО ДОЛЖНО БЫТЬ ЗАПОЛНЕНО.
             days_ahead: На сколько дней вперед искать слоты.
 
         Returns:
             Dict с результатом операции.
         """
-        print(f"🤖 AIOfferScheduler: Начинаю планирование для {candidate_data.get('name', 'кандидата')}")
-
         # 1. Обогащаем данные кандидата (заполняем ФИО, телефон и т.д., если их нет)
         enriched_candidate = self.enricher.enrich_candidate(candidate_data)
         candidate_name = self.enricher.get_full_name(enriched_candidate)
+        
+        # Если имя не удалось получить, пробуем из исходных данных
+        if not candidate_name or candidate_name == "Кандидат":
+            if 'first_name' in candidate_data and 'last_name' in candidate_data:
+                candidate_name = f"{candidate_data.get('last_name', '')} {candidate_data.get('first_name', '')}".strip()
+            else:
+                candidate_name = candidate_data.get('name', 'Кандидат')
+        
+        print(f"🤖 AIOfferScheduler: Начинаю планирование для {candidate_name}")
+        print(f"🤖 AIOfferScheduler: Интервьюер: {recruiter_name}")
 
         # 2. Загружаем текущее расписание
         schedule = self._load_schedule()
@@ -136,11 +144,11 @@ class AIOfferScheduler:
                 "candidate": candidate_name
             }
 
-        # 5. Создаем запись о собеседовании
+        # 5. Создаем запись о собеседовании с РЕАЛЬНЫМ ИМЕНЕМ КАНДИДАТА
         interview_record = self._create_interview_record(
-            candidate_name,
+            candidate_name,  # ← Передаем реальное имя
             best_slot,
-            recruiter_name,
+            recruiter_name,  # ← Передаем имя интервьюера
             vacancy_data
         )
 
@@ -153,12 +161,12 @@ class AIOfferScheduler:
 
         # 7. Генерируем и сохраняем текст оффера (приглашения)
         offer_text = self.generator.generate_offer(
-            candidate_name,
+            candidate_name,  # ← Передаем реальное имя
             vacancy_data.get('title', 'Вакансия'),
             interview_record
         )
         offer_filename = self.generator.save_offer(
-            candidate_name,
+            candidate_name,  # ← Передаем реальное имя
             vacancy_data.get('title', 'vacancy'),
             interview_record
         )
@@ -166,11 +174,11 @@ class AIOfferScheduler:
         # 8. Отправляем уведомление
         self._send_notification(interview_record)
 
-        print(f"✅ AIOfferScheduler: Собеседование назначено на {date_str} в {best_slot['time']}")
+        print(f"✅ AIOfferScheduler: Собеседование для {candidate_name} назначено на {date_str} в {best_slot['time']}")
 
         return {
             "success": True,
-            "message": f"Собеседование успешно назначено на {date_str} в {best_slot['time']}",
+            "message": f"Собеседование для кандидата {candidate_name} успешно назначено на {date_str} в {best_slot['time']}",
             "candidate": candidate_name,
             "interview": interview_record,
             "offer_file": offer_filename,

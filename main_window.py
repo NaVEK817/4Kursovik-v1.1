@@ -5,7 +5,7 @@
 import json
 import os
 from datetime import datetime
-from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+from PyQt5.QtWidgets import (QFormLayout, QGroupBox, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout,
                              QTableWidget, QTableWidgetItem, QHeaderView,
                              QPushButton, QLabel, QMessageBox, QMenu,
                              QDialog, QTextEdit, QVBoxLayout as QVBoxDialog,
@@ -21,6 +21,252 @@ ANALYSIS_STATUS_FILE = "analysis_status.json"
 from ai_schedule_manager import AIScheduleManager
 from messages_window import MessagesWindow
 
+try:
+    import matplotlib
+    matplotlib.use('Qt5Agg')
+    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+    from matplotlib.figure import Figure
+    import matplotlib.pyplot as plt
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+    print("matplotlib не установлен. Графики будут недоступны.")
+
+class StatisticsWindow(QDialog):
+    """Окно статистики с графиками"""
+    
+    def __init__(self, schedule_manager, parent=None):
+        super().__init__(parent)
+        self.manager = schedule_manager
+        self.init_ui()
+        
+    def init_ui(self):
+        self.setWindowTitle("📊 Статистика и аналитика")
+        self.setGeometry(200, 200, 900, 700)
+        self.setStyleSheet(styles.MAIN_STYLE)
+        
+        layout = QVBoxLayout()
+        layout.setSpacing(15)
+        
+        # Заголовок
+        header = QLabel("📈 Детальная статистика работы")
+        header.setObjectName("headerLabel")
+        layout.addWidget(header)
+        
+        if not MATPLOTLIB_AVAILABLE:
+            warning_label = QLabel("⚠️ Для отображения графиков установите matplotlib: pip install matplotlib")
+            warning_label.setStyleSheet(f"color: {styles.S7_RED}; padding: 10px;")
+            layout.addWidget(warning_label)
+        
+        # Создаем вкладки
+        tabs = QTabWidget()
+        
+        # Вкладка с графиками
+        if MATPLOTLIB_AVAILABLE:
+            charts_tab = self.create_charts_tab()
+            tabs.addTab(charts_tab, "📊 Графики")
+        
+        # Вкладка с текстовой статистикой
+        stats_tab = self.create_stats_tab()
+        tabs.addTab(stats_tab, "📋 Детальная статистика")
+        
+        layout.addWidget(tabs)
+        
+        # Кнопка закрытия
+        close_btn = QPushButton("Закрыть")
+        close_btn.clicked.connect(self.accept)
+        close_btn.setCursor(Qt.PointingHandCursor)
+        layout.addWidget(close_btn, alignment=Qt.AlignCenter)
+        
+        self.setLayout(layout)
+    
+    def create_charts_tab(self):
+        """Создает вкладку с графиками"""
+        widget = QWidget()
+        layout = QVBoxLayout()
+        
+        # Получаем данные для графиков
+        stats = self.manager.get_schedule_statistics()
+        messages = self.manager._load_messages()
+        
+        # Создаем фигуру с подграфиками
+        fig = Figure(figsize=(10, 8))
+        
+        # График 1: Статусы собеседований (круговая диаграмма)
+        ax1 = fig.add_subplot(221)
+        status_stats = stats.get('status_stats', {})
+        labels = []
+        sizes = []
+        colors = []
+        
+        status_map = {
+            'scheduled': ('Запланировано', styles.S7_GREEN),
+            'rescheduled': ('Перенесено', '#FFA500'),
+            'completed': ('Завершено', '#4CAF50'),
+            'cancelled': ('Отменено', styles.S7_RED)
+        }
+        
+        for key, (label, color) in status_map.items():
+            count = status_stats.get(key, 0)
+            if count > 0:
+                labels.append(label)
+                sizes.append(count)
+                colors.append(color)
+        
+        if sizes:
+            ax1.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90)
+            ax1.set_title('Статусы собеседований')
+        else:
+            ax1.text(0.5, 0.5, 'Нет данных', ha='center', va='center')
+            ax1.set_title('Статусы собеседований')
+        
+        # График 2: Сообщения по статусам (столбчатая диаграмма)
+        ax2 = fig.add_subplot(222)
+        
+        msg_stats = {
+            'Прочитанные': sum(1 for m in messages if m.get('read', False)),
+            'Непрочитанные': sum(1 for m in messages if not m.get('read', False)),
+            'В ожидании': sum(1 for m in messages if m.get('status') == 'pending')
+        }
+        
+        bars = ax2.bar(msg_stats.keys(), msg_stats.values(), color=[styles.S7_GREEN, styles.S7_RED, '#FFA500'])
+        ax2.set_title('Статистика сообщений')
+        ax2.set_ylabel('Количество')
+        
+        # Добавляем значения на столбцы
+        for bar in bars:
+            height = bar.get_height()
+            ax2.text(bar.get_x() + bar.get_width()/2., height, f'{int(height)}', ha='center', va='bottom')
+        
+        # График 3: Собеседования по дням (линейный график)
+        ax3 = fig.add_subplot(223)
+        
+        daily_stats = stats.get('daily_stats', {})
+        if daily_stats:
+            dates = sorted(daily_stats.keys())[-14:]  # Последние 14 дней
+            counts = [daily_stats[d]['count'] for d in dates]
+            
+            ax3.plot(range(len(dates)), counts, marker='o', color=styles.S7_GREEN, linewidth=2)
+            ax3.set_title('Собеседования по дням (последние 14 дней)')
+            ax3.set_xticks(range(len(dates)))
+            ax3.set_xticklabels([d[-5:] for d in dates], rotation=45)
+            ax3.set_ylabel('Количество')
+            ax3.grid(True, alpha=0.3)
+        else:
+            ax3.text(0.5, 0.5, 'Нет данных за последние дни', ha='center', va='center')
+            ax3.set_title('Собеседования по дням')
+        
+        # График 4: Топ интервьюеров
+        ax4 = fig.add_subplot(224)
+        
+        interviewer_stats = {}
+        for date, interviews in stats.get('daily_stats', {}).items():
+            for interviewer in interviews.get('interviewers', []):
+                interviewer_stats[interviewer] = interviewer_stats.get(interviewer, 0) + 1
+        
+        if interviewer_stats:
+            top_interviewers = sorted(interviewer_stats.items(), key=lambda x: x[1], reverse=True)[:5]
+            names = [i[0][:10] + '...' if len(i[0]) > 10 else i[0] for i in top_interviewers]
+            counts = [i[1] for i in top_interviewers]
+            
+            bars = ax4.barh(names, counts, color=styles.S7_LIGHT_GREEN)
+            ax4.set_title('Топ-5 интервьюеров')
+            ax4.set_xlabel('Количество собеседований')
+            
+            # Добавляем значения
+            for bar in bars:
+                width = bar.get_width()
+                ax4.text(width, bar.get_y() + bar.get_height()/2, f'{int(width)}', ha='left', va='center')
+        else:
+            ax4.text(0.5, 0.5, 'Нет данных об интервьюерах', ha='center', va='center')
+            ax4.set_title('Топ интервьюеров')
+        
+        fig.tight_layout()
+        
+        # Создаем canvas для отображения
+        canvas = FigureCanvas(fig)
+        layout.addWidget(canvas)
+        
+        widget.setLayout(layout)
+        return widget
+    
+    def create_stats_tab(self):
+        """Создает вкладку с детальной текстовой статистикой"""
+        widget = QWidget()
+        layout = QVBoxLayout()
+        
+        stats = self.manager.get_schedule_statistics()
+        messages = self.manager._load_messages()
+        
+        # Общая статистика
+        general_group = QGroupBox("📊 Общая статистика")
+        general_layout = QFormLayout()
+        
+        general_layout.addRow("Всего собеседований:", QLabel(str(stats.get('total_interviews', 0))))
+        general_layout.addRow("Дней с собеседованиями:", QLabel(str(stats.get('days_with_interviews', 0))))
+        general_layout.addRow("Среднее в день:", QLabel(f"{stats.get('average_per_day', 0):.2f}"))
+        
+        general_group.setLayout(general_layout)
+        layout.addWidget(general_group)
+        
+        # Статусы
+        status_group = QGroupBox("📈 Статусы собеседований")
+        status_layout = QFormLayout()
+        
+        status_stats = stats.get('status_stats', {})
+        status_layout.addRow("✅ Запланировано:", QLabel(str(status_stats.get('scheduled', 0))))
+        status_layout.addRow("🔄 Перенесено:", QLabel(str(status_stats.get('rescheduled', 0))))
+        status_layout.addRow("✔️ Завершено:", QLabel(str(status_stats.get('completed', 0))))
+        status_layout.addRow("❌ Отменено:", QLabel(str(status_stats.get('cancelled', 0))))
+        
+        status_group.setLayout(status_layout)
+        layout.addWidget(status_group)
+        
+        # Сообщения
+        msg_group = QGroupBox("📬 Сообщения")
+        msg_layout = QFormLayout()
+        
+        msg_stats = stats.get('message_stats', {})
+        msg_layout.addRow("Всего сообщений:", QLabel(str(msg_stats.get('total', 0))))
+        msg_layout.addRow("Непрочитанных:", QLabel(str(msg_stats.get('unread', 0))))
+        msg_layout.addRow("Ожидают ответа:", QLabel(str(msg_stats.get('pending_requests', 0))))
+        
+        msg_group.setLayout(msg_layout)
+        layout.addWidget(msg_group)
+        
+        # Самые загруженные дни
+        busy_group = QGroupBox("📅 Самые загруженные дни")
+        busy_layout = QVBoxLayout()
+        
+        busy_days = stats.get('busiest_days', [])
+        if busy_days:
+            for date, count in busy_days[:5]:
+                busy_layout.addWidget(QLabel(f"  • {date}: {count} собеседований"))
+        else:
+            busy_layout.addWidget(QLabel("Нет данных"))
+        
+        busy_group.setLayout(busy_layout)
+        layout.addWidget(busy_group)
+        
+        # Предстоящие собеседования
+        upcoming_group = QGroupBox("🔜 Ближайшие собеседования")
+        upcoming_layout = QVBoxLayout()
+        
+        upcoming = stats.get('upcoming_interviews', [])
+        if upcoming:
+            for i in upcoming[:5]:
+                upcoming_layout.addWidget(
+                    QLabel(f"  • {i.get('date')} {i.get('time')}: {i.get('candidate')} ({i.get('interviewer')})")
+                )
+        else:
+            upcoming_layout.addWidget(QLabel("Нет предстоящих собеседований"))
+        
+        upcoming_group.setLayout(upcoming_layout)
+        layout.addWidget(upcoming_group)
+        
+        layout.addStretch()
+        widget.setLayout(layout)
+        return widget
 
 class VacancyDetailDialog(QDialog):
     """Диалог с полной информацией о вакансии"""
@@ -199,10 +445,10 @@ class MainWindow(QMainWindow):
 
         # Растягивание колонок
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # ID
-        header.setSectionResizeMode(1, QHeaderView.Stretch)  # Название
+        header.setSectionResizeMode(0, QHeaderView.Stretch)  # ID
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Название
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Зарплата
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Город
+        header.setSectionResizeMode(3, QHeaderView.Stretch)  # Город
         header.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Опыт
         header.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # График
         header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # Занятость
@@ -247,49 +493,12 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", f"Не удалось открыть окно сообщений: {str(e)}")
 
     def show_schedule_stats(self):
-        """Показывает статистику расписания"""
+        """Показывает статистику расписания с графиками"""
         try:
-            stats = self.schedule_manager.get_schedule_statistics()
-
-            # Формируем текст статистики
-            text = f"""
-📊 ОБЩАЯ СТАТИСТИКА РАСПИСАНИЯ
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📈 Всего собеседований: {stats.get('total_interviews', 0)}
-📅 Дней с собеседованиями: {stats.get('days_with_interviews', 0)}
-📊 В среднем в день: {stats.get('average_per_day', 0):.1f}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📊 СТАТУСЫ СОБЕСЕДОВАНИЙ:
-• Запланировано: {stats.get('status_stats', {}).get('scheduled', 0)}
-• Перенесено: {stats.get('status_stats', {}).get('rescheduled', 0)}
-• Завершено: {stats.get('status_stats', {}).get('completed', 0)}
-• Отменено: {stats.get('status_stats', {}).get('cancelled', 0)}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📬 СООБЩЕНИЯ:
-• Всего: {stats.get('message_stats', {}).get('total', 0)}
-• Непрочитанных: {stats.get('message_stats', {}).get('unread', 0)}
-• Ожидают ответа: {stats.get('message_stats', {}).get('pending_requests', 0)}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📅 САМЫЕ ЗАГРУЖЕННЫЕ ДНИ:
-"""
-            for date, count in stats.get('busiest_days', []):
-                text += f"  • {date}: {count} собеседований\n"
-
-            # Предстоящие собеседования
-            upcoming = stats.get('upcoming_interviews', [])
-            if upcoming:
-                text += f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📅 БЛИЖАЙШИЕ:\n"
-                for i in upcoming[:3]:
-                    text += f"  • {i.get('date')} {i.get('time')}: {i.get('candidate')}\n"
-
-            QMessageBox.information(self, "Статистика расписания", text)
+            self.stats_window = StatisticsWindow(self.schedule_manager, self)
+            self.stats_window.exec_()
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить статистику: {str(e)}")
-
     def open_update_window(self):
         """Открытие окна обновления данных"""
         try:

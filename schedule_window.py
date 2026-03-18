@@ -845,7 +845,7 @@ class ScheduleWindow(QWidget):
         for date_str, interviews in self.interviews.items():
             times = {}
             for i in interviews:
-                # Проверка на дублирование времени
+            # Проверка на дублирование времени
                 time = i.get('time')
                 if time in times:
                     conflicts.append({
@@ -855,16 +855,22 @@ class ScheduleWindow(QWidget):
                     })
                 else:
                     times[time] = i
-                
-                # Проверка на прошедшее время
+            
+            # Проверка статуса - завершенные не считаем ошибками
+                status = i.get('status', 'scheduled')
+                if status == 'completed':
+                    continue  # Пропускаем завершенные собеседования
+            
+            # Проверка на прошедшее время
                 try:
                     interview_datetime = datetime.strptime(f"{date_str} {time}", "%Y-%m-%d %H:%M")
-                    if interview_datetime < current_datetime:
+                    if interview_datetime < current_datetime and status != 'completed':
+                        # Если собеседование уже прошло, предлагаем отметить его как завершенное
                         errors.append({
                             'date': date_str,
                             'time': time,
                             'candidate': i.get('candidate'),
-                            'error': 'Собеседование назначено на прошедшее время'
+                            'error': 'Собеседование уже прошло. Рекомендуется отметить статус как "Завершено"'
                         })
                 except:
                     errors.append({
@@ -873,8 +879,8 @@ class ScheduleWindow(QWidget):
                         'candidate': i.get('candidate'),
                         'error': 'Некорректный формат даты/времени'
                     })
-                
-                # Проверка наличия имени кандидата
+            
+            # Проверка наличия имени кандидата
                 if not i.get('candidate') or i.get('candidate').strip() == '':
                     errors.append({
                         'date': date_str,
@@ -882,8 +888,8 @@ class ScheduleWindow(QWidget):
                         'candidate': 'Не указан',
                         'error': 'Не указано имя кандидата'
                     })
-                
-                # Проверка наличия интервьюера
+            
+            # Проверка наличия интервьюера
                 if not i.get('interviewer') or i.get('interviewer').strip() == '':
                     errors.append({
                         'date': date_str,
@@ -892,31 +898,63 @@ class ScheduleWindow(QWidget):
                         'error': 'Не назначен интервьюер'
                     })
 
-        # Формируем отчет
+    # Формируем отчет
         report = ""
-        
+    
         if conflicts:
             report += "🔴 НАЙДЕНЫ КОНФЛИКТЫ ВРЕМЕНИ:\n\n"
             for c in conflicts:
                 report += f"📅 {c['date']} в {c['time']}:\n"
                 for i in c['interviews']:
-                    report += f"  • {i.get('candidate')} ({i.get('interviewer')})\n"
+                    report += f"  • {i.get('candidate')} ({i.get('interviewer')}) - статус: {i.get('status', 'scheduled')}\n"
                 report += "\n"
-        
+    
         if errors:
             if report:
                 report += "\n" + "="*50 + "\n\n"
-            report += "⚠️ ОШИБКИ В НАЗНАЧЕНИЯХ:\n\n"
+            report += "⚠️ ОШИБКИ И РЕКОМЕНДАЦИИ:\n\n"
             for e in errors:
                 report += f"📅 {e['date']} {e['time']} - {e['candidate']}\n"
                 report += f"   ❌ {e['error']}\n\n"
-        
+    
         if not conflicts and not errors:
             QMessageBox.information(self, "Анализ", "✅ Конфликтов и ошибок не найдено")
         else:
-            QMessageBox.warning(self, "Результаты анализа", report)
+            # Добавляем кнопку для отметки прошедших собеседований как завершенных
+            reply = QMessageBox.question(
+                self,
+                "Результаты анализа",
+                report + "\n\nХотите отметить все прошедшие собеседования как завершенные?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+        
+            if reply == QMessageBox.Yes:
+                self.mark_past_interviews_as_completed()
 
-
+    def mark_past_interviews_as_completed(self):
+        """Отмечает все прошедшие собеседования как завершенные"""
+        current_datetime = datetime.now()
+        marked_count = 0
+    
+        for date_str, interviews in list(self.interviews.items()):
+            for i in interviews:
+                try:
+                    interview_datetime = datetime.strptime(f"{date_str} {i.get('time', '')}", "%Y-%m-%d %H:%M")
+                    if interview_datetime < current_datetime and i.get('status') != 'completed':
+                        i['status'] = 'completed'
+                        marked_count += 1
+                except:
+                    continue
+    
+        if marked_count > 0:
+            self.save_interviews()
+            self.update_interviews_list()
+            self.update_calendar_counts()
+            QMessageBox.information(
+                self,
+                "Статусы обновлены",
+                f"✅ {marked_count} собеседований отмечены как завершенные"
+            )
 class RescheduleRequestDialog(QDialog):
     """Диалог запроса на перенос"""
 
